@@ -1,0 +1,38 @@
+---
+title: "Space transformation"
+output: word_document
+date: "2023-11-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Package
+```{r}
+library(rgl)
+```
+
+# Figure 3.1: Transformation to a 2D subspace of R^3
+```{r}
+n <- 100
+xvals <- seq(1, n, by = 1)
+yvals <- seq(1, n, by = 1)
+a <- matrix(0, nrow = length(xvals), ncol = length(yvals))
+b<-a
+c<-a
+for(i in 1:length(xvals)){
+  x <- xvals[i]
+  for(j in 1:length(yvals)){
+    y <- yvals[j]
+    a[i,j] <- max(x,y)
+    b[i,j] <- x/a[i,j]
+    c[i,j] <- y/a[i,j]
+  }
+}
+a.vec <- as.vector(a)
+b.vec <- as.vector(b)
+c.vec <- as.vector(c)
+cols <- ifelse(b.vec == 1, "coral2", "cyan3")
+plot3d(a.vec,b.vec,c.vec, col = cols, xlab = "", ylab = "", zlab = "", pch = 19)
+```
