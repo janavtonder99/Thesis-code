@@ -1,0 +1,466 @@
+---
+title: "Application"
+output: word_document
+date: "2023-08-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+```
+
+# Packages
+```{r}
+library(evd)
+library(rgl)
+library(mnormt)
+library(ggplot2)
+```
+
+# Small simulation study
+
+## Bivariate normal dataset
+```{r}
+mu = c(0, 0)
+sigma = matrix(c(1.8, 0.85, 0.85, 1.7), nrow = 2)
+rho <- sigma[1,2]/(sqrt(sigma[1,1]) *sqrt(sigma[2,2]))
+rho
+
+set.seed(2)
+biv.norm.dat = rmnorm(10000, mu, sigma)
+biv.norm.dat = as.data.frame(biv.norm.dat)
+colnames(biv.norm.dat) = c('X', 'Y')
+plot(biv.norm.dat)
+dat <- biv.norm.dat
+```
+
+## Choosing the thresholds u1 and u2
+```{r}
+n <- nrow(dat)
+transf.data <- (-log(apply(dat, 2, rank)/(n + 1)))^(-1)
+T_var <- apply(transf.data, 1, min)
+
+my_percentile_func <- function(x , prob = 0.9){
+x_sorted <- sort(x)
+n <- length(x)
+pos <- prob * n
+ind_lower <- floor(pos)
+ind_upper <- ceiling(pos)
+u <- c()
+for(i in 1:length(prob)){
+  pos.tmp <- pos[i]
+  ind_lo <- ind_lower[i]
+  ind_up <- ind_upper[i]
+  if(ind_lo == ind_up){
+    u[i] <- x_sorted[ind_lo]
+    }else{
+      w1 <- ind_up - pos.tmp
+      w2 <- pos.tmp - ind_lo
+      u[i] <- w1 * x_sorted[ind_lo] + w2 * x_sorted[ind_up]
+    }
+  }
+return(u)
+}
+
+u <- my_percentile_func(x = T_var, prob = 0.9)
+k1 <- round(n * (1 - exp(-1/u))) # k1 = k2
+u1 <- sort(dat[,1])[n-k1]
+u2 <- sort(dat[,2])[n-k1]
+u1
+u2
+```
+
+## Ramos and Ledford model: optimising over all 7 parameters
+```{r}
+# F(x)
+F.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- 1 - lambda * (max(1 + gamma * (x - u.marg)/sigma,0)) ^ (-1/gamma)
+  if(aa == 1) aa = 0.9999999
+  return(aa)
+}
+
+# f(x)
+f.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- lambda / sigma * (max(1 + gamma * (x - u.marg)/sigma,0)) ^ (-(1/gamma) - 1)
+  if(aa == 0) aa = 0.0000001
+  return(lambda / sigma * (max(1 + gamma * (x - u.marg)/sigma,0)) ^ (-(1/gamma) - 1))
+}
+
+# Fbar.ST(s,t)
+Fbar.ST <- function(s, t, eta, alpha, rho){
+  N.rho <- rho ^ (-1/eta) + rho ^ (1/eta) - (rho ^ (-1/alpha) + rho ^ (1/alpha)) ^ (alpha/eta)
+  term1 <- (rho * s) ^ (-1/eta)
+  term2 <- (t/rho) ^ (-1/eta)
+  term3 <- ((rho * s) ^ (-1/alpha) + (t/rho) ^ (-1/alpha)) ^ (alpha/eta)
+  aa <- term1 + term2 - term3
+  return((N.rho ^ (-1)) * aa)
+}
+
+# Fbar.XY(x,y)
+Fbar.XY <- function(arg1, arg2, u.joint, u.1, u.2, lambda.joint, lambda.x, sigma.x, gamma.x, lambda.y, sigma.y, gamma.y, eta.hat, alpha.hat, rho.hat){
+  arg.a <- -1/(u.joint * log(F.marg(x = arg1, 
+                                    u.marg = u.1, 
+                                    lambda = lambda.x, 
+                                    sigma = sigma.x, 
+                                    gamma = gamma.x)))
+  
+  arg.b <- -1/(u.joint * log(F.marg(x = arg2, 
+                                    u.marg = u.2, 
+                                    lambda = lambda.y, 
+                                    sigma = sigma.y, 
+                                    gamma = gamma.y)))
+  
+  prob <- lambda.joint * Fbar.ST(s = arg.a, 
+                                 t = arg.b, 
+                                 eta = eta.hat, 
+                                 alpha = alpha.hat, 
+                                 rho = rho.hat)
+  return(prob)
+}
+
+# derivative of Fbar w.r.t. x
+deriv.x.Fbar <- function(x, y, u, u1, u2, lambda, lambda1, lambda2, sigma1, gamma1, sigma2, gamma2, eta, alpha, rho){
+  F1x <- F.marg(x, u1, lambda1, sigma1, gamma1)
+  F2y <- F.marg(y, u2, lambda2, sigma2, gamma2)
+  f1x <- f.marg(x, u1, lambda1, sigma1, gamma1)
+
+  s <- -(1/(u * log(F1x)))
+  t <- -(1/(u * log(F2y)))
+  h1 <- rho * s
+  h2 <- t/rho
+  ds.dx <- f1x / (u * (log(F1x))^2 * F1x)
+  N.rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+  cc <- (h1^(-1/alpha) + h2^(-1/alpha))
+  
+  # outside block brackets
+  aa <- - (lambda * N.rho ^(-1) * h1 ^ (-1/eta-1) * ds.dx * rho) / eta
+  
+  # inside block brackets
+  b1 <- cc^(alpha/eta - 1)
+  b2 <- h1 ^ (1/eta - 1/alpha)
+  bb <- 1 - b1 * b2
+  
+  return(aa * bb)
+}
+
+# derivative of Fbar w.r.t. y
+deriv.y.Fbar <- function(x, y, u, u1, u2, lambda, lambda1, lambda2, sigma1, gamma1, sigma2, gamma2, eta, alpha, rho){
+  F1x <- F.marg(x, u1, lambda1, sigma1, gamma1)
+  F2y <- F.marg(y, u2, lambda2, sigma2, gamma2)
+  f2y <- f.marg(y, u2, lambda2, sigma2, gamma2)
+  s <- -(1/(u * log(F1x)))
+  t <- -(1/(u * log(F2y)))
+  h1 <- rho * s
+  h2 <- t/rho
+  dt.dy <- f2y / (u * (log(F2y))^2 * F2y)
+  N.rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+  cc <- (h1^(-1/alpha) + h2^(-1/alpha))
+    
+  # outside block brackets
+  aa <- - (lambda * N.rho^(-1) * h2 ^ (-1/eta-1) * dt.dy * (1/rho))/eta
+  
+  # inside block brackets
+  b1 <- cc^(alpha/eta - 1)
+  b2 <- h2 ^ (1/eta - 1/alpha)
+  bb <- 1 - b1 * b2
+  
+  return(aa * bb)
+}
+
+# derivative of Fbar w.r.t. x and y
+deriv.xy.Fbar <- function(x, y, u, u1, u2, lambda, lambda1, lambda2, sigma1, gamma1, sigma2, gamma2, eta, alpha, rho){
+  F1x <- F.marg(x, u1, lambda1, sigma1, gamma1)
+  F2y <- F.marg(y, u2, lambda2, sigma2, gamma2)
+  f1x <- f.marg(x, u1, lambda1, sigma1, gamma1)
+  f2y <- f.marg(y, u2, lambda2, sigma2, gamma2)
+  s <- -(1/(u * log(F1x)))
+  t <- -(1/(u * log(F2y))) 
+  h1 <- rho * s
+  h2 <- t/rho
+  ds.dx <- f1x / (u * (log(F1x))^2 * F1x)
+  dt.dy <- f2y / (u * (log(F2y))^2 * F2y)
+  N.rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+  cc <- (h1^(-1/alpha) + h2^(-1/alpha))
+    
+  value <- - lambda * (N.rho^(-1)) * (1/eta) * (alpha/eta - 1) * (1/alpha) * dt.dy * ds.dx * (h2^(-1/alpha - 1)) * (cc^(alpha/eta - 2)) * (h1^(-1/alpha - 1))
+  
+  return(value)
+}
+
+# negative log-likelihood based on RL model
+negloglik_original_data <- function(par, dat, u1, u2, u){
+  
+  sigma1 <- par[1]
+  gamma1 <- par[2]
+  sigma2 <- par[3]
+  gamma2 <- par[4]
+  eta <- par[5]
+  alpha <- par[6]
+  rho <- par[7]
+  
+  if(sigma1 < 0 | sigma2 < 0 | eta < 0 | eta > 1 | rho < 0){
+    negloglik <- 100000
+  } else {
+  n <- nrow(dat)
+  lambda <- sum(dat[,1] > u1 & dat[,2] > u2)/n
+  lambda1 <- sum(dat[,1] > u1)/n
+  lambda2 <- sum(dat[,2] > u2)/n
+  
+  N_rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+    
+  L <- c()
+  for(i in 1:n){
+    xi <- dat[i,1]
+    yi <- dat[i,2]
+    
+    # L00
+    if(xi <= u1 & yi <= u2){            
+      l <- F.marg(u1, u1, lambda1, sigma1, gamma1) + F.marg(u2, u2, lambda2, sigma2, gamma2) - 1 + Fbar.XY(u1, u2, u, u1, u2, lambda, lambda1, sigma1, gamma1, lambda2, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond1: na")
+      if(l<=0){
+          print('Condition 1')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      # L10
+      } else if(xi > u1 & yi <= u2){ 
+        l = f.marg(xi, u1, lambda1, sigma1, gamma1) + 
+          deriv.x.Fbar(xi, u2, u, u1, u2, lambda, lambda1, lambda2, 
+                       sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) {
+          print("condition2: na")
+        }
+        if(l<=0){
+          print('Condition 2')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+        
+      # L01
+    } else if(xi <= u1 & yi > u2){ 
+      l = f.marg(yi, u2, lambda2, sigma2, gamma2) + 
+        deriv.y.Fbar(u1, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond3: na")
+        if(l<=0){
+          print('Condition 3')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      } else{
+        l <- deriv.xy.Fbar(xi, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) print("condition 4: na")
+        if(l<=0){
+          print('Condition 4')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+    }
+  } 
+  any_lt0 = any(L<=0)
+  if(any_lt0){
+    print('Still NaN')
+    idx = which(L<=0)
+    print(L[idx])
+    L[idx] = 1e-08
+  }
+  loglik_vec <- log(L + 1e-08)
+  loglik <- sum(loglik_vec)
+  negloglik <- -1 * loglik
+}
+  return(negloglik)
+}
+```
+
+## optimisation
+```{r}
+mod1 <- fpot(dat[,1], threshold = u1, model = "gpd")
+mod2 <- fpot(dat[,2], threshold = u2, model = "gpd")
+aa <- mod1$estimate
+bb <- mod2$estimate
+initial.vals <- c(aa, bb, "eta" = 0.8, "alpha" = 0.9, "rho" = 1.2)
+optim.mod <- optim(par = initial.vals, fn = negloglik_original_data, dat = dat, u1 = u1, u2 = u2, u = u, control = list(maxit = 10000))
+optim.pars.bivnorm <- optim.mod$par
+optim.pars.bivnorm
+```
+
+## RL model vs classical approach
+### Functions needed
+```{r}
+# Fbar - RL model
+# F(x)
+F.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- 1 - lambda * (1 + gamma * (x - u.marg)/sigma) ^ (-1/gamma)
+  return(aa)
+}
+
+# f(x)
+f.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- lambda / sigma * (1 + gamma * (x - u.marg)/sigma) ^ (-(1/gamma) - 1)
+  return(aa)
+}
+
+# Fbar.ST(s,t)
+Fbar.ST <- function(s, t, eta, alpha, rho){
+  N.rho <- rho ^ (-1/eta) + rho ^ (1/eta) - (rho ^ (-1/alpha) + rho ^ (1/alpha)) ^ (alpha/eta)
+  term1 <- (rho * s) ^ (-1/eta)
+  term2 <- (t/rho) ^ (-1/eta)
+  term3 <- ((rho * s) ^ (-1/alpha) + (t/rho) ^ (-1/alpha)) ^ (alpha/eta)
+  aa <- term1 + term2 - term3
+  return((N.rho ^ (-1)) * aa)
+}
+
+# Fbar.XY(x,y)
+Fbar.XY <- function(arg1, arg2, u.joint, u.1, u.2, lambda.joint, lambda.x, sigma.x, gamma.x, lambda.y, sigma.y, gamma.y, eta.hat, alpha.hat, rho.hat){
+  arg.a <- -1/(u.joint * log(F.marg(x = arg1, 
+                                    u.marg = u.1, 
+                                    lambda = lambda.x, 
+                                    sigma = sigma.x, 
+                                    gamma = gamma.x)))
+  
+  arg.b <- -1/(u.joint * log(F.marg(x = arg2, 
+                                    u.marg = u.2, 
+                                    lambda = lambda.y, 
+                                    sigma = sigma.y, 
+                                    gamma = gamma.y)))
+  
+  prob <- lambda.joint * Fbar.ST(s = arg.a, 
+                                 t = arg.b, 
+                                 eta = eta.hat, 
+                                 alpha = alpha.hat, 
+                                 rho = rho.hat)
+  return(prob)
+}
+
+# Fbar - classical approach
+est.Fbarxy <- function(data, thresh1, thresh2, x0, y0){
+  
+  lambda1 <- sum(data[,1] > thresh1)/nrow(data)
+  lambda2 <- sum(data[,2] > thresh2)/nrow(data)
+  lambda <- sum(data[,1] > thresh1 & data[,2] > thresh2)/nrow(data)
+  
+  mod <- evd :: fbvpot(data, threshold = c(thresh1, thresh2), model = "alog")
+  fitted_model <- fitted(mod)
+  
+  Fhatx <- F.marg(x = x0, u.marg = thresh1, lambda = lambda1, sigma = fitted_model["scale1"], gamma = fitted_model["shape1"])
+  Fhaty <- F.marg(x = y0, u.marg = thresh2, lambda = lambda2, sigma = fitted_model["scale2"], gamma = fitted_model["shape2"])
+  
+  w <- log(Fhaty) / log(Fhatx * Fhaty)
+  Ahatw <- abvevd(w, dep = fitted_model["dep"], asy = fitted_model[c("asy1", "asy2")], model = "alog")
+    # F.hat(x,y)
+    Fxy <- exp(log(Fhatx * Fhaty) * Ahatw)
+     # Fbar.hat(x,y)
+  Fbarxy <- 1 - Fhatx - Fhaty + Fxy
+  return(Fbarxy)
+}
+
+```
+
+## Plot of Fbar for the two approaches
+```{r}
+lambda = sum(dat[,1] > u1 & dat[,2] > u2)/nrow(dat)
+lambda1 = sum(dat[,1] > u1)/nrow(dat)
+lambda2 <- sum(dat[,2] > u2)/nrow(dat)
+
+xseq = seq(u1, 5.5, length.out = 1000)
+yseq = seq(u2, max(dat[,2]), length.out = 1000)
+
+grid_vals = expand.grid(xseq, yseq)
+
+grid_df = as.data.frame(grid_vals)
+colnames(grid_df) = c('X', 'Y')
+
+par.hat <- optim.pars.bivnorm
+
+# Fbar: RL model
+zvals <- Fbar.XY(arg1 = grid_df[,1], arg2 = grid_df[,2], u.joint = u, u.1 = u1, u.2 = u2, lambda.joint = lambda, lambda.x = lambda1, sigma.x = par.hat[1], gamma.x = par.hat[2], lambda.y = lambda2, sigma.y = par.hat[3], gamma.y = par.hat[4], eta.hat = par.hat[5], alpha.hat = par.hat[6], rho.hat = par.hat[7])
+plot3d(grid_df[,1], grid_df[,2], zvals, col = "lightgreen")
+index1 <- which(zvals > 0.001 - 0.0001 & zvals < 0.001 + 0.0001)
+points3d(x = grid_df$X[index1], y = grid_df$Y[index1], z = 0.001, pch = 20, col = "seagreen")
+w1 <- grid_df$X[index1[18897]]
+s1 <- grid_df$Y[index1[18897]]
+sum(dat$X > w1 & dat$Y > s1)/n
+
+# Fbar: classical approach
+n <- nrow(dat)
+k0 <- bvtcplot(dat)$k0
+k1 <- (k0+1)/2
+t1 <- sort(dat[,1])[n-k1]
+t2 <- sort(dat[,2])[n-k1]
+zseq <- est.Fbarxy(data = dat, thresh1 = t1, thresh2 = t2, x0 = grid_df$X, y0 = grid_df$Y)
+plot3d(grid_df$X, grid_df$Y, zseq, col = "coral")
+index2 <- which(zseq > 0.001 - 0.0001 & zseq < 0.001 + 0.0001)
+points3d(x = grid_df$X[index2], y = grid_df$Y[index2], z = 0.001, pch = 20, col = "coral4")
+w2 <- grid_df$X[index2[18897]]
+s2 <- grid_df$Y[index2[18897]]
+sum(dat$X > w2 & dat$Y > s2)/n
+```
+
+## Quantile curves of Fbar for the two approaches
+```{r}
+df_contour_RL = data.frame('X' = grid_vals[,1], 'Y' = grid_vals[,2], 'Fbar' = zvals)
+df_contour_classic = data.frame('X' = grid_vals[,1], 'Y' = grid_vals[,2], 'Fbar' = zseq)
+df_plt = cbind(dat, 'Fbar' = rep(1, nrow(dat)))
+
+# Create a data frame for the legend with custom linetypes
+legend_data <- data.frame(
+  Contour_Type = c("RL Contour", "Classic Contour"),
+  Linetype = c(1,5)
+)
+
+# Graph 1: p = 0.025, 0.0025, 0.00025
+ggplot(mapping = aes(x = X, y = Y, z = Fbar)) + 
+  geom_point(color = 'palegreen3', data = df_plt) +
+  geom_contour(data = df_contour_RL, aes(color = 'RL'), 
+               breaks = c(0.025, 0.0025, 0.00025)) + 
+  geom_contour(data = df_contour_classic, aes(color = 'Classic'), 
+               breaks = c(0.025, 0.0025, 0.00025), linetype = 2) +
+  coord_cartesian(xlim = c(u1+0.21, 5.4), ylim = c(u2+0.2, max(grid_df$Y))) +
+  theme_classic() +
+  scale_color_manual(values = c('RL' = 'dodgerblue3', 'Classic' = "tomato"),
+                     labels = c('RL' = 'RL model', 'Classic' = 'Classical approach')) +
+  labs(color = 'Method') +
+  guides(color = guide_legend(override.aes = list(linetype = c(5,1)))) +
+  scale_linetype_manual(values = legend_data$Linetype,
+                        labels = legend_data$Contour_Type)
+
+##########################################################################
+
+# Graph 2: focus on a point (where the two lines cross...point was found by trial and error)
+x0 <- 3.566
+y0 <- 4.221
+ggplot(mapping = aes(x = X, y = Y, z = Fbar)) + 
+  geom_point(color = 'palegreen3', data = df_plt) +
+  geom_contour(data = df_contour_RL, aes(color = 'RL'), 
+               breaks = 0.00005) + 
+  geom_contour(data = df_contour_classic, aes(color = 'Classic'), 
+               breaks = 0.00035, linetype = 2) +
+  coord_cartesian(xlim = c(u1+0.21, 5.4), ylim = c(u2+0.2, max(grid_df$Y))) +
+  theme_classic() +
+  geom_hline(yintercept = y0, linetype = 2, color = "grey53") +
+  geom_vline(xintercept = x0, linetype = 2, color = "grey53") +
+  scale_color_manual(values = c('RL' = 'dodgerblue3', 'Classic' = "tomato"),
+                     labels = c('RL' = 'RL model', 'Classic' = 'Classical approach')) +
+  labs(color = 'Method') +
+  guides(color = guide_legend(override.aes = list(linetype = c(5,1)))) +
+  scale_linetype_manual(values = legend_data$Linetype,
+                        labels = legend_data$Contour_Type)
+
+# Real value
+Fxy <- pmnorm(x = c(x0, y0), mu, sigma)
+Fx <- pnorm(q = x0, mean = mu[1], sd = sqrt(sigma[1,1]))
+Fy <- pnorm(q = y0, mean = mu[2], sd = sqrt(sigma[2,2]))
+true_p <- round(1 - Fx - Fy + Fxy, 8)
+0.0001/true_p
+true_p
+```

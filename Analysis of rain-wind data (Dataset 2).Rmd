@@ -1,0 +1,937 @@
+---
+title: "Application"
+output: word_document
+date: "2023-08-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+```
+
+# Packages
+```{r}
+library(evd)
+library(extRemes)
+library(VGAM)
+library(ExtDist)
+library(ismev)
+library(fdrtool)
+library(readxl)
+library(numDeriv)
+library(ggplot2)
+library(rgl)
+```
+
+# Reading in the rain and wind dataset
+```{r}
+ct_dat <- read.csv("cape-town_rain-wind.csv", header = T)
+dat <- ct_dat
+
+par(mar = c(4.2, 4.2, 1, 1))
+cor(dat$Rain, dat$Wind)
+plot(dat$Rain, dat$Wind, xlab = "Rainfall (mm)", ylab = "Wind speed (m/s)", col = "dodgerblue1")
+summary(dat$Rain)
+summary(dat$Wind)
+```
+
+# Testing for independence
+```{r}
+plot.ts(dat, plot.type = "multiple")
+acf(dat$Rain)
+acf(dat$Wind)
+Box.test(dat$Rain, lag = 3, type = "Ljung-Box")
+Box.test(dat$Wind, lag = 3, type = "Ljung-Box")
+```
+
+# Testing for asymptotic dependence
+```{r}
+my_percentile_func <- function(x , prob = 0.9){
+x_sorted <- sort(x)
+n <- length(x)
+pos <- prob * n
+ind_lower <- floor(pos)
+ind_upper <- ceiling(pos)
+u <- c()
+for(i in 1:length(prob)){
+  pos.tmp <- pos[i]
+  ind_lo <- ind_lower[i]
+  ind_up <- ind_upper[i]
+  if(ind_lo == ind_up){
+    u[i] <- x_sorted[ind_lo]
+    }else{
+      w1 <- ind_up - pos.tmp
+      w2 <- pos.tmp - ind_lo
+      u[i] <- w1 * x_sorted[ind_lo] + w2 * x_sorted[ind_up]
+    }
+  }
+return(u)
+}
+par(mar = c(4.2, 4.5, 1, 1))
+
+# chi(u) vs u
+chiplot(data = dat, nq = 100, qlim = c(0.5, 0.994), which = 1, conf = 0.95, cicol = "mediumpurple2", trunc = F, ylim1 = c(-0.1, 1.1), spcases = T, xlab = expression(u), ylab1 = expression(hat(chi)(u)), main1 = "", xlim = c(0.5,1), lwd = 1.5)
+
+# chi.bar(u) vs u
+par(mar = c(4.2, 4.5, 1, 1))
+chiplot(data = dat, nq = 100, qlim = c(0.5,0.994), which = 2, conf = 0.95, cicol = "seagreen", trunc = F, ylim2 = c(-1.1,1.1), spcases = T, xlab = expression(u), ylab2 = expression(hat(bar(chi))(u)), main2 = "", xlim = c(0.5,1), lwd = 1.5)
+
+# eta vs u
+nn <- nrow(dat)
+Fhat_dat <- apply(dat, 2, rank)/(nn + 1)
+
+dat_star <- -1/log(Fhat_dat)
+T_var <- apply(dat_star, 1, min)
+thresh <- my_percentile_func(T_var, prob = c(0.5, 0.98))
+par(mar = c(4.2, 4.2, 1, 1))
+
+###########################################################################
+# tcplot() modification: allowing the user to choose the colour and width of the lines.
+tcplot.mod <- function (data, tlim, model = c("gpd", "pp"), pscale = FALSE, 
+    cmax = FALSE, r = 1, ulow = -Inf, rlow = 1, nt = 25, which = 1:npar, 
+    conf = 0.95, lty = 1, lwd = 1, type = "b", col.choice = "black", cilty = 1, cicol = "chocolate2", cilwd = 1, vci = TRUE, 
+    xlab, xlim, ylabs, ylims, ask = nb.fig < length(which) && 
+        dev.interactive(), ...) 
+{
+    model <- match.arg(model)
+    u <- seq(tlim[1], tlim[2], length = nt)
+    if (pscale) {
+        tlim[1] <- mean(data <= tlim[1], na.rm = TRUE)
+        tlim[2] <- mean(data <= tlim[2], na.rm = TRUE)
+        pvec <- seq(tlim[1], tlim[2], length = nt)
+        u <- my_percentile_func(data, prob = pvec)
+    }
+    locs <- scls <- shps <- matrix(NA, nrow = nt, ncol = 3)
+    dimnames(locs) <- list(round(u, 2), c("lower", "loc", "upper"))
+    dimnames(shps) <- list(round(u, 2), c("lower", "shape", "upper"))
+    if (model == "gpd") {
+        pname <- "mscale"
+        npar <- 2
+    }
+    if (model == "pp") {
+        pname <- "scale"
+        npar <- 3
+    }
+    dimnames(scls) <- list(round(u, 2), c("lower", pname, "upper"))
+    z <- fpot(data, u[1], model = model, cmax = cmax, r = r, 
+        ulow = ulow, rlow = rlow, corr = TRUE, ...)
+    stvals <- as.list(round(fitted(z), 3))
+    for (i in 1:nt) {
+        z <- fpot(data, u[i], model = model, start = stvals, 
+            cmax = cmax, r = r, ulow = ulow, rlow = rlow, corr = TRUE, 
+            ...)
+        stvals <- as.list(fitted(z))
+        mles <- fitted(z)
+        stderrs <- std.errors(z)
+        cnst <- qnorm((1 + conf)/2)
+        shp <- mles["shape"]
+        scl <- mles["scale"]
+        shpse <- stderrs["shape"]
+        sclse <- stderrs["scale"]
+        if (model == "pp") {
+            loc <- mles["loc"]
+            locse <- stderrs["loc"]
+            locs[i, ] <- c(loc - cnst * locse, loc, loc + cnst * 
+                locse)
+        }
+        if (model == "gpd") {
+            scl <- scl - shp * u[i]
+            covar <- z$corr[1, 2] * prod(stderrs)
+            sclse <- sqrt(sclse^2 - 2 * u[i] * covar + (u[i] * 
+                shpse)^2)
+        }
+        scls[i, ] <- c(scl - cnst * sclse, scl, scl + cnst * 
+            sclse)
+        shps[i, ] <- c(shp - cnst * shpse, shp, shp + cnst * 
+            shpse)
+    }
+    show <- rep(FALSE, npar)
+    show[which] <- TRUE
+    nb.fig <- prod(par("mfcol"))
+    if (ask) {
+        op <- par(ask = TRUE)
+        on.exit(par(op))
+    }
+    if (pscale) 
+        u <- pvec
+    if (missing(xlim)) 
+        xlim <- tlim
+    if (missing(xlab)) {
+        xlab <- "Threshold"
+        if (pscale) 
+            xlab <- "Threshold probability"
+    }
+    if (model == "pp") {
+        ylab <- c("Location", "Scale", "Shape")
+        if (!missing(ylabs)) 
+            ylab[show] <- ylabs
+        ylim <- rbind(range(locs), range(scls), range(shps))
+        if (!missing(ylims)) 
+            ylim[show, ] <- ylims
+        if (show[1]) {
+            matplot(u, locs, type = "n", xlab = xlab, ylab = ylab[1], 
+                xlim = xlim, ylim = ylim[1, ])
+            lines(u, locs[, 2], lty = lty, lwd = lwd, type = type)
+            if (vci) 
+                segments(u, locs[, 1], u, locs[, 3], lty = cilty)
+            else {
+                lines(u, locs[, 1], lty = cilty, col = cicol, lwd = cilwd)
+                lines(u, locs[, 3], lty = cilty, col = cicol, lwd = cilwd)
+            }
+        }
+        if (show[2]) {
+            matplot(u, scls, type = "n", xlab = xlab, ylab = ylab[2], 
+                xlim = xlim, ylim = ylim[2, ])
+            lines(u, scls[, 2], lty = lty, lwd = lwd, type = type)
+            if (vci) 
+                segments(u, scls[, 1], u, scls[, 3], lty = cilty)
+            else {
+                lines(u, scls[, 1], lty = cilty, col = cicol, lwd = cilwd)
+                lines(u, scls[, 3], lty = cilty, col = cicol, lwd = cilwd)
+            }
+        }
+        if (show[3]) {
+            matplot(u, shps, type = "n", xlab = xlab, ylab = ylab[3], 
+                xlim = xlim, ylim = ylim[3, ])
+            lines(u, shps[, 2], lty = lty, lwd = lwd, type = type)
+            if (vci) 
+                segments(u, shps[, 1], u, shps[, 3], lty = cilty)
+            else {
+                lines(u, shps[, 1], lty = cilty, col = cicol, lwd = cilwd)
+                lines(u, shps[, 3], lty = cilty, col = cicol, lwd = cilwd)
+            }
+        }
+        rtlist <- list(locs = locs, scales = scls, shapes = shps)
+    }
+    if (model == "gpd") {
+        ylab <- c("Modified Scale", "Shape")
+        if (!missing(ylabs)) 
+            ylab[show] <- ylabs
+        ylim <- rbind(range(scls), range(shps))
+        if (!missing(ylims)) 
+            ylim[show, ] <- ylims
+        if (show[1]) {
+            matplot(u, scls, type = "n", xlab = xlab, ylab = ylab[1], 
+                xlim = xlim, ylim = ylim[1, ])
+            lines(u, scls[, 2], lty = lty, lwd = lwd, type = type)
+            if (vci) 
+                segments(u, scls[, 1], u, scls[, 3], lty = cilty)
+            else {
+                lines(u, scls[, 1], lty = cilty, col = cicol, lwd = cilwd)
+                lines(u, scls[, 3], lty = cilty, col = cicol, lwd = cilwd)
+            }
+        }
+        if (show[2]) {
+            matplot(u, shps, type = "n", xlab = xlab, ylab = ylab[2], 
+                xlim = xlim, ylim = ylim[2, ])
+            lines(u, shps[, 2], lty = lty, lwd = lwd, type = type, col = col.choice) # modified
+            if (vci) 
+                segments(u, shps[, 1], u, shps[, 3], lty = cilty)
+            else {
+                lines(u, shps[, 1], lty = cilty, col = cicol, lwd = cilwd)
+                lines(u, shps[, 3], lty = cilty, col = cicol, lwd = cilwd)
+            }
+        }
+        rtlist <- list(scales = scls, shapes = shps)
+    }
+    invisible(rtlist)
+}
+
+#############################################################################
+# plot of eta vs u (using the modified tcplot() function)
+tcplot.mod(data = T_var,tlim = thresh, nt = 35, pscale = TRUE, which = 2, vci = FALSE, cilty = 2, type = "l", ylab = expression(hat(eta)), xlim = c(0.5,1), ylim = c(-0.01,1.5), cicol = "chocolate3", xlab = expression(u), col.choice = "black", lwd = 1.5, cilwd = 1.5)
+abline(h = c(0,0.5,1), lty = 5, col = "grey")
+
+# estimating eta with standard error
+thresh <- my_percentile_func(T_var, prob = 0.9)
+m1 <- fpot(T_var, thresh = thresh)
+m1$estimate[2]
+m1$std.err[2]
+eta.est <- round(m1$estimate[2],3)
+eta.std.err <- round(m1$std.err[2],3)
+c(m1$estimate[2] - qnorm(0.975) * m1$std.err[2],
+m1$estimate[2] + qnorm(0.975) * m1$std.err[2])
+c(eta.est - qnorm(0.975) * eta.std.err,
+eta.est + qnorm(0.975) * eta.std.err)
+
+# log-ratio test
+l1 <- logLik(m1)[1]
+m0 <- fpot(T_var, thresh = thresh, shape = 1)
+l0 <- logLik(m0)[1] 
+l0;l1
+## test statistic
+test_stat <- -2 * (l0 - l1)
+test_stat
+## critical value
+crit_val = qnorm((1+0.95)/2)^2
+crit_val
+# p-value
+2*(1-pnorm(sqrt(test_stat)))
+```
+
+# Choosing the thresholds u1 and u2
+```{r}
+n <- nrow(dat)
+# approx. standard Frechet data:
+transf.data <- (-log(apply(dat, 2, rank)/(n + 1)))^(-1)
+# T variable
+T_var <- apply(transf.data, 1, min)
+
+# percentile function
+my_percentile_func <- function(x , prob = 0.9){
+x_sorted <- sort(x)
+n <- length(x)
+pos <- prob * n
+ind_lower <- floor(pos)
+ind_upper <- ceiling(pos)
+u <- c()
+for(i in 1:length(prob)){
+  pos.tmp <- pos[i]
+  ind_lo <- ind_lower[i]
+  ind_up <- ind_upper[i]
+  if(ind_lo == ind_up){
+    u[i] <- x_sorted[ind_lo]
+    }else{
+      w1 <- ind_up - pos.tmp
+      w2 <- pos.tmp - ind_lo
+      u[i] <- w1 * x_sorted[ind_lo] + w2 * x_sorted[ind_up]
+    }
+  }
+return(u)
+}
+u <- my_percentile_func(x = T_var, prob = 0.9)
+k1 <- round(n * (1 - exp(-1/u))) # k1 = k2
+u1 <- sort(dat[,1])[n-k1]
+u2 <- sort(dat[,2])[n-k1]
+# thresholds
+u1
+u2
+```
+
+# Marginal distribution: GP valid approx.?
+```{r}
+# Rain
+## ML method (POT)
+gpd_mle <- fevd(dat[,1], threshold = u1, type = "GP", method = "MLE")
+## Diagnostic plot
+par(mar = c(4.2, 4.2, 1, 1))
+plot(gpd_mle, type = c("qq"), main ="", col = "mediumpurple1", pch = 19)
+
+# Wind
+## ML method (POT)
+gpd_mle <- fevd(dat[,2], threshold = u2, type = "GP", method = "MLE")
+## Diagnostic plot
+par(mar = c(4.2, 4.2, 1, 1))
+plot(gpd_mle, type = c("qq"), main ="", col = "goldenrod2", pch = 19)
+```
+
+# Ramos and Ledford model: optimising over all 7 parameters
+## Functions needed for the optimisation
+```{r}
+# F(x)
+F.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- 1 - lambda * (max(1 + gamma * (x - u.marg)/sigma,0)) ^ (-1/gamma)
+  if(aa == 1) aa = 0.9999999
+  return(aa)
+}
+
+# f(x)
+f.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- lambda / sigma * (max(1 + gamma * (x - u.marg)/sigma,0)) ^ (-(1/gamma) - 1)
+  if(aa == 0) aa = 0.0000001
+  return(lambda / sigma * (max(1 + gamma * (x - u.marg)/sigma,0)) ^ (-(1/gamma) - 1))
+}
+
+# Fbar.ST(s,t)
+Fbar.ST <- function(s, t, eta, alpha, rho){
+  N.rho <- rho ^ (-1/eta) + rho ^ (1/eta) - (rho ^ (-1/alpha) + rho ^ (1/alpha)) ^ (alpha/eta)
+  term1 <- (rho * s) ^ (-1/eta)
+  term2 <- (t/rho) ^ (-1/eta)
+  term3 <- ((rho * s) ^ (-1/alpha) + (t/rho) ^ (-1/alpha)) ^ (alpha/eta)
+  aa <- term1 + term2 - term3
+  return((N.rho ^ (-1)) * aa)
+}
+
+# Fbar.XY(x,y)
+Fbar.XY <- function(arg1, arg2, u.joint, u.1, u.2, lambda.joint, lambda.x, sigma.x, gamma.x, lambda.y, sigma.y, gamma.y, eta.hat, alpha.hat, rho.hat){
+  arg.a <- -1/(u.joint * log(F.marg(x = arg1, 
+                                    u.marg = u.1, 
+                                    lambda = lambda.x, 
+                                    sigma = sigma.x, 
+                                    gamma = gamma.x)))
+  
+  arg.b <- -1/(u.joint * log(F.marg(x = arg2, 
+                                    u.marg = u.2, 
+                                    lambda = lambda.y, 
+                                    sigma = sigma.y, 
+                                    gamma = gamma.y)))
+  
+  prob <- lambda.joint * Fbar.ST(s = arg.a, 
+                                 t = arg.b, 
+                                 eta = eta.hat, 
+                                 alpha = alpha.hat, 
+                                 rho = rho.hat)
+  return(prob)
+}
+# derivative of Fbar w.r.t. x
+deriv.x.Fbar <- function(x, y, u, u1, u2, lambda, lambda1, lambda2, sigma1, gamma1, sigma2, gamma2, eta, alpha, rho){
+  F1x <- F.marg(x, u1, lambda1, sigma1, gamma1)
+  F2y <- F.marg(y, u2, lambda2, sigma2, gamma2)
+  f1x <- f.marg(x, u1, lambda1, sigma1, gamma1)
+
+  s <- -(1/(u * log(F1x)))
+  t <- -(1/(u * log(F2y)))
+  h1 <- rho * s
+  h2 <- t/rho
+  ds.dx <- f1x / (u * (log(F1x))^2 * F1x)
+  N.rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+  cc <- (h1^(-1/alpha) + h2^(-1/alpha))
+  
+  # outside block brackets
+  aa <- - (lambda * N.rho ^(-1) * h1 ^ (-1/eta-1) * ds.dx * rho) / eta
+  
+  # inside block brackets
+  b1 <- cc^(alpha/eta - 1)
+  b2 <- h1 ^ (1/eta - 1/alpha)
+  bb <- 1 - b1 * b2
+  
+  return(aa * bb)
+}
+
+# derivative of Fbar w.r.t. y
+deriv.y.Fbar <- function(x, y, u, u1, u2, lambda, lambda1, lambda2, sigma1, gamma1, sigma2, gamma2, eta, alpha, rho){
+  F1x <- F.marg(x, u1, lambda1, sigma1, gamma1)
+  F2y <- F.marg(y, u2, lambda2, sigma2, gamma2)
+  f2y <- f.marg(y, u2, lambda2, sigma2, gamma2)
+  s <- -(1/(u * log(F1x)))
+  t <- -(1/(u * log(F2y)))
+  h1 <- rho * s
+  h2 <- t/rho
+  dt.dy <- f2y / (u * (log(F2y))^2 * F2y)
+  N.rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+  cc <- (h1^(-1/alpha) + h2^(-1/alpha))
+    
+  # outside block brackets
+  aa <- - (lambda * N.rho^(-1) * h2 ^ (-1/eta-1) * dt.dy * (1/rho))/eta
+  
+  # inside block brackets
+  b1 <- cc^(alpha/eta - 1)
+  b2 <- h2 ^ (1/eta - 1/alpha)
+  bb <- 1 - b1 * b2
+  
+  return(aa * bb)
+}
+
+# derivative of Fbar w.r.t. x and y
+deriv.xy.Fbar <- function(x, y, u, u1, u2, lambda, lambda1, lambda2, sigma1, gamma1, sigma2, gamma2, eta, alpha, rho){
+  F1x <- F.marg(x, u1, lambda1, sigma1, gamma1)
+  F2y <- F.marg(y, u2, lambda2, sigma2, gamma2)
+  f1x <- f.marg(x, u1, lambda1, sigma1, gamma1)
+  f2y <- f.marg(y, u2, lambda2, sigma2, gamma2)
+  s <- -(1/(u * log(F1x)))
+  t <- -(1/(u * log(F2y))) 
+  h1 <- rho * s
+  h2 <- t/rho
+  ds.dx <- f1x / (u * (log(F1x))^2 * F1x)
+  dt.dy <- f2y / (u * (log(F2y))^2 * F2y)
+  N.rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+  cc <- (h1^(-1/alpha) + h2^(-1/alpha))
+    
+  value <- - lambda * (N.rho^(-1)) * (1/eta) * (alpha/eta - 1) * (1/alpha) * dt.dy * ds.dx * (h2^(-1/alpha - 1)) * (cc^(alpha/eta - 2)) * (h1^(-1/alpha - 1))
+  
+  return(value)
+}
+
+# negative log-likelihood function
+negloglik_original_data <- function(par, dat, u1, u2, u){
+  
+  sigma1 <- par[1]
+  gamma1 <- par[2]
+  sigma2 <- par[3]
+  gamma2 <- par[4]
+  eta <- par[5]
+  alpha <- par[6]
+  rho <- par[7]
+  
+  if(sigma1 < 0 | sigma2 < 0 | eta < 0 | eta > 1 | rho < 0){
+    negloglik <- 100000
+  } else {
+  n <- nrow(dat)
+  lambda <- sum(dat[,1] > u1 & dat[,2] > u2)/n
+  lambda1 <- sum(dat[,1] > u1)/n
+  lambda2 <- sum(dat[,2] > u2)/n
+  
+  N_rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+    
+  L <- c()
+  for(i in 1:n){
+    xi <- dat[i,1]
+    yi <- dat[i,2]
+    
+    # L00
+    if(xi <= u1 & yi <= u2){            
+      l <- F.marg(u1, u1, lambda1, sigma1, gamma1) + F.marg(u2, u2, lambda2, sigma2, gamma2) - 1 + Fbar.XY(u1, u2, u, u1, u2, lambda, lambda1, sigma1, gamma1, lambda2, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond1: na")
+      if(l<=0){
+          print('Condition 1')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      # L10
+      } else if(xi > u1 & yi <= u2){ 
+        l = f.marg(xi, u1, lambda1, sigma1, gamma1) + 
+          deriv.x.Fbar(xi, u2, u, u1, u2, lambda, lambda1, lambda2, 
+                       sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) {
+          print("condition2: na")
+        }
+        if(l<=0){
+          print('Condition 2')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+        
+      # L01
+    } else if(xi <= u1 & yi > u2){ 
+      l = f.marg(yi, u2, lambda2, sigma2, gamma2) + 
+        deriv.y.Fbar(u1, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond3: na")
+        if(l<=0){
+          print('Condition 3')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      } else{
+        l <- deriv.xy.Fbar(xi, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) print("condition 4: na")
+        if(l<=0){
+          print('Condition 4')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+    }
+  } 
+  any_lt0 = any(L<=0)
+  if(any_lt0){
+    print('Still NaN')
+    idx = which(L<=0)
+    print(L[idx])
+    L[idx] = 1e-08
+  }
+  loglik_vec <- log(L + 1e-08)
+  loglik <- sum(loglik_vec)
+  negloglik <- -1 * loglik
+}
+  return(negloglik)
+}
+```
+
+## optimisation
+```{r}
+# marginal estimates (useful for finding initial values for joint optimisation)
+gpd.mod1 <- fpot(x = dat[,1], threshold = u1, model = "gpd")
+gpd.mod2 <- fpot(x = dat[,2], threshold = u2, model = "gpd")
+gpd.mod1$estimate
+gpd.mod2$estimate
+# initial values (based on marginal estimates)
+initial.vals <- c("sigma1" = as.numeric(gpd.mod1$estimate["scale"]), "gamma1" = as.numeric(gpd.mod1$estimate["shape"]), "sigma2" = as.numeric(gpd.mod2$estimate["scale"]), "gamma2" = as.numeric(gpd.mod2$estimate["shape"]), "eta" = 0.7, "alpha" = 0.8, "rho" = 1.1)
+
+# optimisation: maximum likelihood estimates of all 7 parameters
+optim.mod <- optim(par = initial.vals, fn = negloglik_original_data, dat = dat, u1 = u1, u2 = u2, u = u, control = list(maxit = 10000))
+optim.pars.ct <- optim.mod$par
+round(optim.pars.ct,3)
+```
+
+## Delta method: to estimate the standard errors of the parameter estimates
+```{r}
+loglik_original_data <- function(par, dat, u1, u2, u){
+  
+  sigma1 <- par[1]
+  gamma1 <- par[2]
+  sigma2 <- par[3]
+  gamma2 <- par[4]
+  eta <- par[5]
+  alpha <- par[6]
+  rho <- par[7]
+  
+  if(sigma1 < 0 | sigma2 < 0 | eta < 0 | eta > 1 | rho < 0){
+    negloglik <- 100000
+  } else {
+  n <- nrow(dat)
+  lambda <- sum(dat[,1] > u1 & dat[,2] > u2)/n
+  lambda1 <- sum(dat[,1] > u1)/n
+  lambda2 <- sum(dat[,2] > u2)/n
+  
+  N_rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+    
+  L <- c()
+  for(i in 1:n){
+    xi <- dat[i,1]
+    yi <- dat[i,2]
+    
+    # L00
+    if(xi <= u1 & yi <= u2){            
+      l <- F.marg(u1, u1, lambda1, sigma1, gamma1) + F.marg(u2, u2, lambda2, sigma2, gamma2) - 1 + Fbar.XY(u1, u2, u, u1, u2, lambda, lambda1, sigma1, gamma1, lambda2, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond1: na")
+      if(l<=0){
+          print('Condition 1')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      # L10
+      } else if(xi > u1 & yi <= u2){ 
+        l = f.marg(xi, u1, lambda1, sigma1, gamma1) + 
+          deriv.x.Fbar(xi, u2, u, u1, u2, lambda, lambda1, lambda2, 
+                       sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) {
+          print("condition2: na")
+        }
+        if(l<=0){
+          print('Condition 2')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+        
+      # L01
+    } else if(xi <= u1 & yi > u2){ 
+      l = f.marg(yi, u2, lambda2, sigma2, gamma2) + 
+        deriv.y.Fbar(u1, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond3: na")
+        if(l<=0){
+          print('Condition 3')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      } else{
+        # if(i == 398) print(c(sigma1, gamma1, sigma2, gamma2, eta, alpha, rho))
+        l <- deriv.xy.Fbar(xi, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) print("condition 4: na")
+        if(l<=0){
+          print('Condition 4')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+    }
+  } 
+  loglik_vec <- log(L + 1e-08)
+  loglik <- sum(loglik_vec)
+  loglik <- loglik
+}
+  return(loglik)
+}
+
+fishinfo_mat <- -hessian(func = loglik_original_data, x = optim.pars.ct, dat = dat, u1 = u1, u2 = u2, u = u)
+varcov_mat <- solve(fishinfo_mat)
+std_errs <- sqrt(diag(varcov_mat))
+round(std_errs, 3)
+# CI for eta
+c("Lower bound" = optim.pars.ct[5] - 1.96 * std_errs[5],
+  "Upper bound" = optim.pars.ct[5] + 1.96 * std_errs[5])
+```
+
+## Extra test for asymptotic dependence 
+### Likelihood ratio test based on RL model
+```{r}
+# negative log-likelihood under the null hypothesis H0
+negloglik_original_data_h0 <- function(par, dat, u1, u2, u){
+  
+  sigma1 <- par[1]
+  gamma1 <- par[2]
+  sigma2 <- par[3]
+  gamma2 <- par[4]
+  eta <- 1
+  alpha <- par[5]
+  rho <- par[6]
+  
+  if(sigma1 < 0 | sigma2 < 0 | eta < 0 | eta > 1 | rho < 0){
+    negloglik <- 100000
+  } else {
+  n <- nrow(dat)
+  lambda <- sum(dat[,1] > u1 & dat[,2] > u2)/n
+  lambda1 <- sum(dat[,1] > u1)/n
+  lambda2 <- sum(dat[,2] > u2)/n
+  
+  N_rho <- rho^(-1/eta) + rho^(1/eta) - (rho^(-1/alpha) + rho^(1/alpha))^(alpha/eta)
+    
+  L <- c()
+  for(i in 1:n){
+    xi <- dat[i,1]
+    yi <- dat[i,2]
+    
+    # L00
+    if(xi <= u1 & yi <= u2){            
+      l <- F.marg(u1, u1, lambda1, sigma1, gamma1) + F.marg(u2, u2, lambda2, sigma2, gamma2) - 1 + Fbar.XY(u1, u2, u, u1, u2, lambda, lambda1, sigma1, gamma1, lambda2, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond1: na")
+      if(l<=0){
+          print('Condition 1')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      # L10
+      } else if(xi > u1 & yi <= u2){ 
+        l = f.marg(xi, u1, lambda1, sigma1, gamma1) + 
+          deriv.x.Fbar(xi, u2, u, u1, u2, lambda, lambda1, lambda2, 
+                       sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) {
+          print("condition2: na")
+        }
+        if(l<=0){
+          print('Condition 2')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+        
+      # L01
+    } else if(xi <= u1 & yi > u2){ 
+      l = f.marg(yi, u2, lambda2, sigma2, gamma2) + 
+        deriv.y.Fbar(u1, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+      if(is.na(l)) print("cond3: na")
+        if(l<=0){
+          print('Condition 3')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+      
+      } else{
+        # if(i == 398) print(c(sigma1, gamma1, sigma2, gamma2, eta, alpha, rho))
+        l <- deriv.xy.Fbar(xi, yi, u, u1, u2, lambda, lambda1, lambda2,
+                     sigma1, gamma1, sigma2, gamma2, eta, alpha, rho)
+        if(is.na(l)) print("condition 4: na")
+        if(l<=0){
+          print('Condition 4')
+          print(l)
+          l = 1e-08
+        }
+        L[i] = l
+    }
+  } 
+  loglik_vec <- log(L + 1e-08)
+  loglik <- sum(loglik_vec)
+  negloglik <- -loglik
+}
+  return(negloglik)
+}
+# ML estimates: obtained by minimising the neg. log-lik. (under H0)
+optim.pars.ct.h0 <- optim(par = initial.vals[c(1,2,3,4,6,7)], fn = negloglik_original_data_h0, dat = dat, u1 = u1, u2 = u2, u = u, control = list(maxit = 10000))$par
+# l0
+l0 <- -negloglik_original_data_h0(par = optim.pars.ct.h0, dat = dat, u1 = u1, u2 = u2, u = u)
+# l1
+l1 <- -negloglik_original_data(par = optim.pars.ct, dat = dat, u1 = u1, u2 = u2, u = u)
+# test statistic
+test_stat <- -2 * (l0 - l1)
+test_stat
+# critical value
+crit_val = qnorm((1+0.95)/2)^2
+crit_val
+# p-value
+2*(1-pnorm(sqrt(test_stat)))
+```
+
+# Comparison: RL model vs classical approach
+## Needed functions
+```{r}
+# Fbar - RL model
+# F(x)
+F.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- 1 - lambda * (1 + gamma * (x - u.marg)/sigma) ^ (-1/gamma)
+  return(aa)
+}
+
+# f(x)
+f.marg <- function(x, u.marg, lambda, sigma, gamma){
+  aa <- lambda / sigma * (1 + gamma * (x - u.marg)/sigma) ^ (-(1/gamma) - 1)
+  return(aa)
+}
+
+# Fbar.ST(s,t)
+Fbar.ST <- function(s, t, eta, alpha, rho){
+  N.rho <- rho ^ (-1/eta) + rho ^ (1/eta) - (rho ^ (-1/alpha) + rho ^ (1/alpha)) ^ (alpha/eta)
+  term1 <- (rho * s) ^ (-1/eta)
+  term2 <- (t/rho) ^ (-1/eta)
+  term3 <- ((rho * s) ^ (-1/alpha) + (t/rho) ^ (-1/alpha)) ^ (alpha/eta)
+  aa <- term1 + term2 - term3
+  return((N.rho ^ (-1)) * aa)
+}
+
+# Fbar.XY(x,y)
+Fbar.XY <- function(arg1, arg2, u.joint, u.1, u.2, lambda.joint, lambda.x, sigma.x, gamma.x, lambda.y, sigma.y, gamma.y, eta.hat, alpha.hat, rho.hat){
+  arg.a <- -1/(u.joint * log(F.marg(x = arg1, 
+                                    u.marg = u.1, 
+                                    lambda = lambda.x, 
+                                    sigma = sigma.x, 
+                                    gamma = gamma.x)))
+  
+  arg.b <- -1/(u.joint * log(F.marg(x = arg2, 
+                                    u.marg = u.2, 
+                                    lambda = lambda.y, 
+                                    sigma = sigma.y, 
+                                    gamma = gamma.y)))
+  
+  prob <- lambda.joint * Fbar.ST(s = arg.a, 
+                                 t = arg.b, 
+                                 eta = eta.hat, 
+                                 alpha = alpha.hat, 
+                                 rho = rho.hat)
+  return(prob)
+}
+
+##################################################################
+
+# Fbar - classical approach
+est.Fbarxy <- function(data, thresh1, thresh2, x0, y0){
+  
+  lambda1 <- sum(data[,1] > thresh1)/nrow(data)
+  lambda2 <- sum(data[,2] > thresh2)/nrow(data)
+  lambda <- sum(data[,1] > thresh1 & data[,2] > thresh2)/nrow(data)
+  
+  mod <- evd :: fbvpot(data, threshold = c(thresh1, thresh2), model = "alog")
+  fitted_model <- fitted(mod)
+  
+  Fhatx <- F.marg(x0, thresh1, lambda1, fitted_model["scale1"],
+                  fitted_model["shape1"])
+  Fhaty <- F.marg(y0, thresh2, lambda2, fitted_model["scale2"],
+                  fitted_model["shape2"])
+  
+  w <- log(Fhaty) / log(Fhatx * Fhaty)
+  Ahatw <- abvevd(w, dep = fitted_model["dep"], asy = fitted_model[c("asy1", "asy2")], model = "alog")
+    # F.hat(x,y)
+    Fxy <- exp(log(Fhatx * Fhaty) * Ahatw)
+     # Fbar.hat(x,y)
+  Fbarxy <- 1 - Fhatx - Fhaty + Fxy
+  return(Fbarxy)
+}
+```
+
+## Plots of Fbar for the two approaches
+```{r}
+# lambda estimates (prop. of data = exceedances)
+lambda = sum(dat[,1] > u1 & dat[,2] > u2)/nrow(dat)
+lambda1 = sum(dat[,1] > u1)/nrow(dat)
+lambda2 <- sum(dat[,2] > u2)/nrow(dat)
+
+# setting up a grid (will be used for graph)
+xseq = seq(u1, 25, length.out = 1000)
+yseq = seq(u2, 11, length.out = 1000)
+grid_vals = expand.grid(xseq, yseq)
+grid_df = as.data.frame(grid_vals)
+colnames(grid_df) = c('Rain', 'Wind')
+
+##########################################################################
+
+# RL model
+par.hat <- optim.pars.ct
+p <- 0.005
+
+# Fbar: RL model
+zvals <- Fbar.XY(arg1 = grid_df[,1], arg2 = grid_df[,2], u.joint = u, u.1 = u1, u.2 = u2, lambda.joint = lambda, lambda.x = lambda1, sigma.x = par.hat[1], gamma.x = par.hat[2], lambda.y = lambda2, sigma.y = par.hat[3], gamma.y = par.hat[4], eta.hat = par.hat[5], alpha.hat = par.hat[6], rho.hat = par.hat[7])
+
+# 3D plot of Fbar (RL model)
+plot3d(grid_df[,1], grid_df[,2], zvals, col = "lightgreen", xlab = "x", ylab = "y", zlab = expression(hat(bar(F))(x,y)))
+index1 <- which(zvals > p - 0.0001 & zvals < p + 0.0001)
+# points3d(x = grid_df$Rain[index], y = grid_df$Wind[index], z = zvals[index], pch = 20, col = "seagreen")
+points3d(x = grid_df$Rain[index1], y = grid_df$Wind[index1], z = p, pch = 20, col = "seagreen")
+
+###########################################################################
+
+# classical approach
+n <- nrow(dat)
+k0 <- bvtcplot(dat)$k0
+k1 <- (k0+1)/2
+t1 <- sort(dat[,1])[n-k1]
+t2 <- sort(dat[,2])[n-k1]
+
+# Fbar hat (classical approach)
+zseq <- est.Fbarxy(data = dat, thresh1 = t1, thresh2 = t2, x0 = grid_df$Rain, y0 = grid_df$Wind)
+plot3d(grid_df$Rain, grid_df$Wind, zseq, col = "plum", xlab = "x", ylab = "y", zlab = "")
+mtext3d(text = expression(hat(bar(F))(x, y)), edge = "z++", line = 6)
+index2 <- which(zseq > p - 0.0001 & zseq < p + 0.0001)
+points3d(x = grid_df$Rain[index2], y = grid_df$Wind[index2], z = p, pch = 20, col = "mediumpurple4")
+
+# 3D plot (classical approach)
+plot3d(grid_df$Rain, grid_df$Wind, zseq, col = "plum", xlab = "x", ylab = "y", zlab = "")
+points3d(x = grid_df$Rain[index2], y = grid_df$Wind[index2], z = p, pch = 20, col = "mediumpurple4")
+```
+
+## Quantile curves of Fbar for the two approaches
+```{r}
+df_contour_RL = data.frame('Rain' = grid_vals[,1], 'Wind' = grid_vals[,2], 'Fbar' = zvals)
+df_contour_classic = data.frame('Rain' = grid_vals[,1], 'Wind' = grid_vals[,2], 'Fbar' = zseq)
+df_plt = cbind(dat, 'Fbar' = rep(1, nrow(dat)))
+
+# Create a data frame for the legend with custom linetypes
+legend_data <- data.frame(
+  Contour_Type = c("RL Contour", "Classic Contour"),
+  Linetype = c(1,5)
+)
+
+# Figure 5.22:
+ggplot(mapping = aes(x = Rain, y = Wind, z = Fbar)) + 
+  geom_point(color = 'skyblue3', data = df_plt) +
+  geom_contour(data = df_contour_RL, aes(color = 'RL'), 
+               breaks = c(0.025, 0.005, 0.001)) + 
+  geom_contour(data = df_contour_classic, aes(color = 'Classic'), 
+               breaks = c(0.025, 0.005, 0.001), 
+               linetype = 5) +
+  geom_hline(yintercept = u2, linetype = 2, color = "grey53") +
+  geom_vline(xintercept = u1, linetype = 2, color = "grey53") +
+  coord_cartesian(xlim = c(u1 + 1, 24.8), ylim = c(u2 + 0.3, 10.2)) +
+  xlab("Rain (mm)") +
+  ylab("Wind (m/s)") +
+  theme_classic() +
+  scale_color_manual(values = c('RL' = 'seagreen', 'Classic' = 'mediumpurple'),
+                     labels = c('RL' = 'RL model', 'Classic' = 'Classical approach')) +
+  labs(color = 'Method') +
+  guides(color = guide_legend(override.aes = list(linetype = c(5,1)))) +
+  scale_linetype_manual(values = legend_data$Linetype,
+                        labels = legend_data$Contour_Type)
+
+##########################################################################
+# Where the two lines cross (using trial and error)
+x0 <- 14.4
+y0 <- 9.2
+
+# Figure 5.23
+ggplot(mapping = aes(x = Rain, y = Wind, z = Fbar)) + 
+  geom_point(color = 'skyblue3', data = df_plt) +
+  geom_contour(data = df_contour_RL, aes(color = 'RL'), 
+               breaks = c(0.0005)) + 
+  geom_contour(data = df_contour_classic, aes(color = 'Classic'), 
+               breaks = c(0.001), 
+               linetype = 5) +
+  geom_hline(yintercept = y0, linetype = 2, color = "grey53") +
+  geom_vline(xintercept = x0, linetype = 2, color = "grey53") +
+  coord_cartesian(xlim = c(u1 + 1, 24.8), ylim = c(u2 + 0.3, 10.2)) +
+  xlab("Rain (mm)") +
+  ylab("Wind (m/s)") +
+  theme_classic() +
+  scale_color_manual(values = c('RL' = 'seagreen', 'Classic' = 'mediumpurple'),
+                     labels = c('RL' = 'RL model', 'Classic' = 'Classical approach')) +
+  labs(color = 'Method') +
+  guides(color = guide_legend(override.aes = list(linetype = c(5,1)))) +
+  scale_linetype_manual(values = legend_data$Linetype,
+                        labels = legend_data$Contour_Type)
+```
