@@ -1,5 +1,5 @@
 ---
-title: "Modification of the beed function"
+title: "Modified functions"
 output: word_document
 date: "2023-08-31"
 ---
@@ -10,7 +10,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Modified functions: run the whole code block.
 ```{r}
-# Modified "madogram" function
+############################################################################
+# (1) Modified "madogram" function:
+# (to fix the error that occurs when using the argument `margin = "est")
+
 madogram.mod <- function (w, data, margin = c("emp", "est", "exp", "frechet", 
     "gumbel")) 
 {
@@ -75,8 +78,9 @@ madogram.mod <- function (w, data, margin = c("emp", "est", "exp", "frechet",
     return(A)
 }
 
-
-# Modified "beed" function
+############################################################################
+# (2) Modified "beed" function:
+# (since it is uses the "madogram" function)
 
 beed.mod <- function (data, x, d = 3, est = c("ht", "cfg", "md", "pick"), 
     margin = c("emp", "est", "exp", "frechet", "gumbel"), k = 13, 
@@ -115,6 +119,7 @@ beed.mod <- function (data, x, d = 3, est = c("ht", "cfg", "md", "pick"),
                 margin = "emp"
                 warning("invalid argument for `margin', empirical transformation dy default")
             }
+          ##############################################################
           # replaced `madogram` with `madogram.mod`
             if (margin == "emp") 
                 y <- switch(est, ht = abvnonpar(x = xx, data = data, 
@@ -138,6 +143,7 @@ beed.mod <- function (data, x, d = 3, est = c("ht", "cfg", "md", "pick"),
                   "cfg")) 
                   warning("Marginal distributions estimated")
             }
+            ##############################################################
         }
         n <- length(y)
         if (is.null(beta)) {
@@ -204,6 +210,7 @@ beed.mod <- function (data, x, d = 3, est = c("ht", "cfg", "md", "pick"),
                 margin = "emp"
                 warning("invalid argument for `margin', empirical transformation dy default")
             }
+          ##############################################################
           # replaced `madogram` with `madogram.mod`
             if (margin == "emp") 
                 y <- switch(est, ht = amvnonpar(x = X, data = data, 
@@ -224,6 +231,7 @@ beed.mod <- function (data, x, d = 3, est = c("ht", "cfg", "md", "pick"),
                   "cfg")) 
                   warning("Marginal distributions estimated")
             }
+            ##############################################################
         }
         n <- length(y)
         yy <- rep(NA, nx)
@@ -307,8 +315,9 @@ beed.mod <- function (data, x, d = 3, est = c("ht", "cfg", "md", "pick"),
     return(out)
 }
 
-
-# tcplot() modification
+############################################################################
+# (3) Modified "tcplot" function:
+# So that the user can choose the colour and width of the lines in the plot
 
 tcplot.mod <- function (data, tlim, model = c("gpd", "pp"), pscale = FALSE, 
     cmax = FALSE, r = 1, ulow = -Inf, rlow = 1, nt = 25, which = 1:npar, 
@@ -447,12 +456,15 @@ tcplot.mod <- function (data, tlim, model = c("gpd", "pp"), pscale = FALSE,
         if (show[2]) {
             matplot(u, shps, type = "n", xlab = xlab, ylab = ylab[2], 
                 xlim = xlim, ylim = ylim[2, ])
-            lines(u, shps[, 2], lty = lty, lwd = lwd, type = type, col = col.choice) # modified
+            lines(u, shps[, 2], lty = lty, lwd = lwd, type = type, 
+                  col = col.choice) # modified (added)
             if (vci) 
                 segments(u, shps[, 1], u, shps[, 3], lty = cilty)
             else {
-                lines(u, shps[, 1], lty = cilty, col = cicol, lwd = cilwd)
-                lines(u, shps[, 3], lty = cilty, col = cicol, lwd = cilwd)
+                lines(u, shps[, 1], lty = cilty, 
+                      col = cicol, lwd = cilwd) # modified (added)
+                lines(u, shps[, 3], lty = cilty, 
+                      col = cicol, lwd = cilwd) # modified (added)
             }
         }
         rtlist <- list(scales = scls, shapes = shps)
@@ -460,8 +472,11 @@ tcplot.mod <- function (data, tlim, model = c("gpd", "pp"), pscale = FALSE,
     invisible(rtlist)
 }
 
-
-## Selection of threshold vector: bvtcplot modification
+############################################################################
+## (4) Modified "bvtcplot" function (for the selection of k)
+# Modifications: 
+# (a) the y-axis (H([0,1]) of the plot now range from 0 to 1 (since H is specifically a probability distribution function) and not from 0 to 2 (the old function defines/treats H as a spectral measure (a "more general" concept)).
+# (b) the vertical line is exluded.
 
 bvtcplot.mod <- function (x, spectral = FALSE, xlab, ylab, ...) 
 {
@@ -477,15 +492,14 @@ bvtcplot.mod <- function (x, spectral = FALSE, xlab, ylab, ...)
     ww <- fla/rr
     rro <- sort(rr, decreasing = TRUE)[-1]
     k <- 1:(nn - 1)
-    k0 <- max(which(rro * k/(2*nn) > 1))
+    k0 <- max(which(rro * k/(2*nn) > 1)) # added the "2" for scaling purposes
     if (!spectral) {
         if (missing(xlab)) 
             xlab <- "k"
         if (missing(ylab)) 
             ylab <- "H([0,1])"
-        plot(k, rro * k/(2*nn), xlab = xlab, ylab = ylab, ...)
+        plot(k, rro * k/(2*nn), xlab = xlab, ylab = ylab, ...) # added the "2" for scaling purposes
         abline(h = 1)
-        # abline(v = k0, lty = 2)
         return(invisible(list(x = k, y = rro * k/(2*nn), k0 = k0)))
     }
     xx <- yy <- seq(0, 1, len = 100)
@@ -494,13 +508,16 @@ bvtcplot.mod <- function (x, spectral = FALSE, xlab, ylab, ...)
         xlab <- "w"
     if (missing(ylab)) 
         ylab <- "H([0,w])"
-    plot(xx, 2/k0 * yy, type = "l", xlab = xlab, ylab = ylab, 
+    plot(xx, 1/k0 * yy, type = "l", xlab = xlab, ylab = ylab, 
         ...)
     abline(h = c(0, 1))
     return(invisible(list(x = xx, y = 1/k0 * yy, k0 = k0)))
 }
 
-# abvnonpar: pot method
+############################################################################
+# (5) Modified "abvnonpar" function:
+# When using the pot method, "(k/2)" should be used for marginal calculations, not "k" as in the original function.
+
 abvnonpar.mod <- function (x = 0.5, data, epmar = FALSE, nsloc1 = NULL, nsloc2 = NULL, 
     method = c("cfg", "pickands", "tdo", "pot"), k = nrow(data)/4, 
     convex = FALSE, rev = FALSE, madj = 0, kmar = NULL, plot = FALSE, 
@@ -522,8 +539,11 @@ abvnonpar.mod <- function (x = 0.5, data, epmar = FALSE, nsloc1 = NULL, nsloc2 =
         if (method == "pot") {
             if (any(k >= nasm)) 
                 stop("k is too large")
+            #########################################################
+          # modified part 1
             u1 <- sort(data[, 1], decreasing = TRUE)[(k/2) + 1]
             u2 <- sort(data[, 2], decreasing = TRUE)[(k/2) + 1]
+            #########################################################
             d1ab <- (data[, 1] > u1) & !is.na(data[, 1])
             d2ab <- (data[, 2] > u2) & !is.na(data[, 2])
             if (!is.null(kmar)) {
@@ -538,8 +558,11 @@ abvnonpar.mod <- function (x = 0.5, data, epmar = FALSE, nsloc1 = NULL, nsloc2 =
                 data[d1ab, 1] <- mtransform(data[d1ab, 1], mle.m1)
                 data[d2ab, 2] <- mtransform(data[d2ab, 2], mle.m2)
             }
+            #########################################################
+            # modified part 2
             data[d1ab, 1] <- -log(1 - (k/2) * data[d1ab, 1]/nasm[1])
             data[d2ab, 2] <- -log(1 - (k/2) * data[d2ab, 2]/nasm[2])
+            #########################################################
             data[!d1ab, 1] <- epdata[!d1ab, 1]
             data[!d2ab, 2] <- epdata[!d2ab, 2]
         }
@@ -701,6 +724,5 @@ abvnonpar.mod <- function (x = 0.5, data, epmar = FALSE, nsloc1 = NULL, nsloc2 =
     }
     a
 }
-
-
+############################################################################
 ```
