@@ -1,5 +1,5 @@
 # Bivariate extremes - code used in thesis
-In my master's thesis, "Distribution Theory and Inference for Bivariate Extremes", the following code was used in each chapter:
+The following code was used in each chapter:
 - Chapter 3,  Figure 3.1: 'Space transformation.Rmd'
 - Chapter 5:*
   - Section 5.2: 'Analysis of temperature data (Dataset 1).Rmd'
