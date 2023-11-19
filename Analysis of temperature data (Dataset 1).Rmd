@@ -86,10 +86,12 @@ chiplot(data = dat, nq = 100, qlim = c(0.5,0.995), which = 2, conf = 0.95, cicol
 
 # eta vs u
 nn <- nrow(dat)
+# approx. standard Frechet data
 Fhat_dat <- apply(dat, 2, rank)/(nn + 1)
-
 dat_star <- -1/log(Fhat_dat)
+# T-variable
 T_var <- apply(dat_star, 1, min)
+# threshold range (use for plot)
 thresh <- my_percentile_func(T_var, prob = c(0.5, 0.98))
 
 # plot of eta vs u
@@ -237,10 +239,10 @@ max_bilog$estimate["alpha"] - max_bilog$estimate["beta"]
 ```{r}
 dat <- max_dat
 par(mar = c(4.7, 4.5, 1.8, 1.8))
-col.a <- "dodgerblue2" # logistic
+col.a <- "dodgerblue2" 
 col.b <- "coral3"
 col.c <- "mediumpurple2"
-col.d <- "seagreen3" # bilogistic
+col.d <- "seagreen3" 
 
 # parametric-estimation
 # symmetric models
