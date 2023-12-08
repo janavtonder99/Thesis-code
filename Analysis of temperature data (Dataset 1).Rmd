@@ -1,0 +1,823 @@
+---
+title: "Analysis of temperature data (Dataset 1)"
+output: word_document
+date: "2023-08-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+```
+
+# Packages
+```{r}
+library(evd)
+library(extRemes)
+library(ExtDist)
+library(VGAM)
+library(ismev)
+library(ExtremalDep)
+library(copula)
+library(rgl)
+```
+
+PLEASE NOTE:
+First run the code in the file named "Modified functions.Rmd".
+
+# Reading in the temperature data
+```{r}
+kb_dat <- read.csv("kim-bloem_temp.csv", header = T)
+```
+
+# Plot of the temperature data
+```{r}
+par(mar = c(4.2, 4.2, 1, 1))
+plot(kb_dat, col = "brown2", xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"), pch = 1)
+cor(kb_dat$Kim, kb_dat$Bloem)
+min(kb_dat$Kim); mean(kb_dat$Kim); max(kb_dat$Kim)
+min(kb_dat$Bloem); mean(kb_dat$Bloem); max(kb_dat$Bloem)
+nrow(kb_dat)
+```
+
+# Test for independence
+```{r}
+plot.ts(kb_dat, plot.type = "multiple")
+acf(kb_dat$Kim, lag.max = 60)
+acf(kb_dat$Bloem)
+Box.test(kb_dat$Kim, lag = 3, type = "Ljung-Box")
+Box.test(kb_dat$Bloem, lag = 3, type = "Ljung-Box")
+```
+
+# Testing for asymptotic independence
+```{r}
+# percentile function
+my_percentile_func <- function(x , prob = 0.9){
+x_sorted <- sort(x)
+n <- length(x)
+pos <- prob * n
+ind_lower <- floor(pos)
+ind_upper <- ceiling(pos)
+u <- c()
+for(i in 1:length(prob)){
+  pos.tmp <- pos[i]
+  ind_lo <- ind_lower[i]
+  ind_up <- ind_upper[i]
+  if(ind_lo == ind_up){
+    u[i] <- x_sorted[ind_lo]
+    }else{
+      w1 <- ind_up - pos.tmp
+      w2 <- pos.tmp - ind_lo
+      u[i] <- w1 * x_sorted[ind_lo] + w2 * x_sorted[ind_up]
+    }
+  }
+return(u)
+}
+par(mar = c(4.2, 4.5, 1, 1))
+dat <- kb_dat
+
+# chi(u) vs u
+chiplot(data = dat, nq = 100, qlim = c(0.5, 0.995), which = 1, conf = 0.95, cicol = "mediumpurple2", trunc = F, ylim1 = c(-0.1, 1.2), spcases = T, xlab = expression(u), ylab1 = expression(hat(chi)(u)), main1 = "", xlim = c(0.5,1), col = "black", lwd = 1.5)
+
+# chi.bar(u) vs u
+par(mar = c(4.2, 4.5, 1, 1))
+chiplot(data = dat, nq = 100, qlim = c(0.5,0.992), which = 2, conf = 0.95, cicol = "seagreen", trunc = F, ylim2 = c(0.4,1.1), spcases = T, xlab = expression(u), ylab2 = expression(hat(bar(chi))(u)), main2 = "", xlim = c(0.5,1), col = "black", lwd = 1.5)
+
+# eta vs u
+nn <- nrow(dat)
+# approx. standard Frechet data
+Fhat_dat <- apply(dat, 2, rank)/(nn + 1)
+dat_star <- -1/log(Fhat_dat)
+# T-variable
+T_var <- apply(dat_star, 1, min)
+# threshold range (use for plot)
+thresh <- my_percentile_func(T_var, prob = c(0.5, 0.98))
+
+# plot of eta vs u
+par(mar = c(4.2, 4.2, 1, 1))
+tcplot.mod(data = T_var,tlim = thresh, nt = 35, pscale = TRUE, which = 2, vci = FALSE, cilty = 2, type = "l", ylab = expression(hat(eta)), xlim = c(0.5,1), ylim = c(-0.01,1.5), cicol = "chocolate3", xlab = expression(u), col.choice = "black", lwd = 1.5, cilwd = 1.5)
+abline(h = c(0,0.5,1), lty = 2, col = "grey")
+
+# estimating eta with standard error
+thresh <- my_percentile_func(T_var, prob = 0.9)
+m1 <- fpot(T_var, thresh = thresh)
+m1$estimate[2]
+m1$std.err[2]
+
+# log-ratio test
+l1 <- logLik(m1)[1]
+m0 <- fpot(T_var, thresh = thresh, shape = 1)
+l0 <- logLik(m0)[1]
+l0;l1
+## test-statistic
+test_stat <- -2 * (l0 - l1)
+test_stat
+## critical value
+crit_val = qnorm((1+0.95)/2)^2
+crit_val
+## p-value
+2*(1-pnorm(sqrt(test_stat)))
+```
+
+# Approach 1: Componentwise maxima
+
+## Componentwise block maxima method
+```{r}
+num_weeks <- nrow(kb_dat)
+block_size <- 31
+num_blocks <- floor(num_weeks/block_size)
+max_dat <- matrix(0, nrow = num_blocks, ncol = 2)
+for(i in 1:num_blocks){
+  block.i <- kb_dat[(i*block_size-(block_size-1)):(i*block_size),]
+  max_dat[i,] <- apply(block.i,2,max)
+}
+max_dat <- as.data.frame(max_dat)
+colnames(max_dat) <- c("Kim", "Bloem")
+
+# making a colour transparent
+transp_col <- function(colour, perc = 50, name = NULL) {
+  rgb.vals <- col2rgb(colour)
+  transp.col <- rgb(rgb.vals[1], rgb.vals[2], rgb.vals[3],
+             max = 255,
+             alpha = (100 - perc) * 255 / 100,
+             names = name)
+  invisible(transp.col)
+}
+# Obs vs non-obs. of componentwise maxima dataset
+A <- max_dat
+A$exists <- do.call(paste0, A) %in% do.call(paste0, kb_dat)
+obs_ind <- which(A$exists == T)
+notobs.ind <- which(A$exists == F)
+
+obs.max <- max_dat[obs_ind,]
+notobs.max <- max_dat[notobs.ind,]
+
+# plot of data and componentwise maxima
+par(mar = c(4.2, 4.2, 1, 1))
+mycol <- transp_col("brown2", perc = 50, name = "lt.brown2")
+plot(kb_dat, col = mycol, xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"))
+points(obs.max, col = transp_col("mediumpurple3", perc = 40, name = "light.purple3"), pch = 19)
+points(obs.max, col = "mediumpurple4", pch = 1)
+points(notobs.max, col = transp_col("lightgreen", perc = 40, name = "light.green"), pch = 19)
+points(notobs.max, col = "chartreuse4", pch = 1)
+
+# zoomed-in plot of componentwise maxima
+par(mar = c(4.2, 4.2, 1, 1))
+plot(obs.max, col = transp_col("mediumpurple3", perc = 40, name = "light.purple3"), pch = 19, xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"),
+     xlim = c(34, 40), ylim  = c(32, 38.7))
+points(obs.max, col = "mediumpurple4", pch = 1)
+points(notobs.max, col = transp_col("lightgreen", perc = 40, name = "light.green"), pch = 19)
+points(notobs.max, col = "chartreuse4", pch = 1)
+nrow(obs.max) + nrow(notobs.max)
+
+# Testing for independence
+acf(max_dat$Kim)
+Box.test(max_dat$Kim, type = "Ljung-Box")
+acf(max_dat$Bloem)
+Box.test(max_dat$Bloem, type = "Ljung-Box")
+## the pairs of block maxima are independent :)
+
+# correlation
+cor(max_dat$Kim, max_dat$Bloem)
+```
+
+## Marginal distributions - GEV good approximation?
+```{r}
+# Kimberley
+
+# Fit GEV to max weekly temp 
+# ML
+gev_mle <- extRemes :: fevd (max_dat$Kim , type ="GEV", period.basis = "week")
+# estimated parameters
+round(gev_mle$results$par, 4)
+
+# Goodness-of-fit
+par(mar = c(4.2, 4.2, 1, 1))
+plot(gev_mle, type = c("qq"), main ="", col = "cornflowerblue", pch = 19)
+
+##################################
+
+# Bloemfontein
+
+# Fit GEV to max weekly temp #####
+# ML
+gev_mle <- extRemes :: fevd (max_dat$Bloem , type ="GEV", period.basis = "week")
+# estimated parameters
+round(gev_mle$results$par, 4)
+
+# Goodness-of-fit
+par(mar = c(4.2, 4.2, 1, 1))
+plot(gev_mle, type = c("qq"), main ="", col = "seagreen3", pch = 19)
+```
+
+## Parametric estimation of Pickands dependence function A(t)
+```{r}
+dat <- max_dat
+
+# fitting models
+# logistic
+max_log <- fbvevd(x = max_dat, model = "log")
+round(rbind(fitted(max_log), std.errors(max_log)), 3)
+
+# husler-reiss
+max_hr <- fbvevd(x = max_dat, model = "hr")
+round(rbind(fitted(max_hr), std.errors(max_hr)), 3)
+
+# asymmetric logistic
+max_alog <- fbvevd(x = max_dat, model = "alog", std.err = T)
+round(rbind(fitted(max_alog), std.errors(max_alog)), 3)
+crit_val_0.95 <- qnorm(p = 0.025, lower.tail = F)
+c("CI_lower" = round(max_alog$estimate["asy2"], 3) - round(max_alog$std.err["asy2"], 3) * crit_val_0.95, 
+  "CI_upper" = round(max_alog$estimate["asy2"], 3) + round(max_alog$std.err["asy2"], 3) * crit_val_0.95)
+
+# bilogistic
+max_bilog <- fbvevd(x = max_dat, model = "bilog")
+round(rbind(fitted(max_bilog), std.errors(max_bilog)), 3)
+# estimate of strength of dependence
+(max_bilog$estimate["alpha"] + max_bilog$estimate["beta"])/2
+# amount of asymmetry
+max_bilog$estimate["alpha"] - max_bilog$estimate["beta"]
+```
+
+## Plots of A(t) - parametric and non-parametric
+```{r}
+dat <- max_dat
+par(mar = c(4.7, 4.5, 1.8, 1.8))
+col.a <- "dodgerblue2" 
+col.b <- "coral3"
+col.c <- "mediumpurple2"
+col.d <- "seagreen3" 
+
+# parametric-estimation
+# symmetric models
+abvevd(dep = fitted(max_log)["dep"], model = "log", plot = T, lty = 1, col = col.a, lwd = 1.5, ylab = expression(hat(A)(t)))
+abvevd(dep = fitted(max_hr)["dep"], model = "hr", add = T, lty = 2, col = col.b, lwd = 1.5)
+# asymmetric models
+abvevd(dep = fitted(max_alog)["dep"], asy = fitted(max_alog)[c("asy1", "asy2")], model = "alog", add = T, lty = 3, col = col.c, lwd = 1.5)
+abvevd(alpha = fitted(max_bilog)["alpha"], beta = fitted(max_bilog)["beta"], model = "bilog", add = T, lty = 4, col = col.d, lwd = 1.5)
+legend("bottomleft", legend = c("Logistic", "Husler-Reiss", "Asy. Logistic", "Bilogistic"), col = c(col.a, col.b, col.c, col.d), lty = 1:4, lwd = rep(1.5, 4))
+
+###########################################################################
+
+# non-parametric estimation
+par(mar = c(4.7, 4.5, 1.8, 1.8))
+x <- ExtremalDep :: simplex(2)
+col1 <- "springgreen3"
+col2 <- "red2"
+col3 <- "royalblue2"
+col4 <- "grey52"
+  
+Apick <- beed.mod(dat, x, d = 2, est = c("pick"), margin = "est", k = 21, plot = T, colour.choice = col1, lwd.choice = 1.5, lty.choice = 1)
+Aht <- beed(dat, x, d = 2, est = c("ht"), margin = "est", k = 21)
+Acfg <- beed(dat, x, d = 2, est = c("cfg"), margin = "est", k = 21)
+Amd <- beed.mod(dat, x, d = 2, est = c("md"), margin = "est", k = 21)
+lines(x[,1], Aht$A, lty = 2, col = col2, lwd = 1.5)
+lines(x[,1], Acfg$A, lty = 3, col = col3, lwd = 1.5)
+lines(x[,1], Amd$A, lty = 4, col = col4, lwd = 1.5)
+legend("bottomleft", legend = c("P-estimator", "HT-estimator", "CFG-estimator", "MD-estimator"), lty = 1:4, lwd = rep(1.5,4), col = c(col1, col2, col3, col4))
+
+###########################################################################
+
+# two parametric models and a non-parametric estimator
+par(mar = c(4.7, 4.5, 1.8, 1.8))
+abvevd(dep = fitted(max_log)["dep"], model = "log", plot = T, lty = 1, col = col.a, lwd = 1.5, ylab = expression(hat(A)(t)))
+abvevd(alpha = fitted(max_bilog)["alpha"], beta = fitted(max_bilog)["beta"], model = "bilog", add = T, lty = 2, col = col.d, lwd = 1.5)
+x <- ExtremalDep :: simplex(2)
+Aht <- beed(dat, x, d = 2, est = c("ht"), margin = "est", k = 21)
+lines(x[,1], Aht$A, lty = 3, col = col2, lwd = 1.5)
+legend("bottomleft", legend = c("Logistic", "Bilogistic", "HT"), lty = c(1,2,3), lwd = rep(1.5,4), col = c(col.a, col.d, col2))
+```
+
+## 3D-plot of estimated BEV distribution G
+```{r}
+# estimated BEV distribution function
+Ghat <- function(max_dat, x0, y0){
+  model.est <- fbvevd(x = max_dat, model = "log", std.err = T)$estimate
+  
+  Ghatx <- pgev(q = x0, location = model.est["loc1"], scale = model.est["scale1"], shape = model.est["shape1"])
+  Ghaty <- pgev(q = y0, location = model.est["loc2"], scale = model.est["scale2"], shape = model.est["shape2"])
+
+  w <- log(Ghaty) / log(Ghatx * Ghaty)
+  Ahatw <- abvevd(w, dep = model.est["dep"], model = "log") 
+  Gxy <- exp(log(Ghatx * Ghaty) * Ahatw)
+     
+  return(Gxy)
+}
+# upper bounds
+model.est <- fbvevd(x = max_dat, model = "log", std.err = T)$estimate
+ub1 <- model.est["loc1"] - model.est["scale1"]/model.est["shape1"]
+ub2 <- model.est["loc2"] - model.est["scale2"]/model.est["shape2"]
+
+# p value
+p = 0.95
+
+# grid of values
+xseq <- seq(min(max_dat$Kim), ub1, length = 1000) # 1000
+yseq <- seq(min(max_dat$Bloem)-1, ub2, length = 1000)
+grid_vals = expand.grid(xseq, yseq)
+grid_df = as.data.frame(grid_vals)
+colnames(grid_df) = c('Kim', 'Bloem')
+zvals <- Ghat(max_dat = max_dat, x0 = grid_df$Kim, y0 = grid_df$Bloem)
+index <- which(zvals > p - 0.003 & zvals < p + 0.003)
+
+# 3D-plot of G hat
+plot3d(grid_df$Kim, grid_df$Bloem, zvals, xlab = expression(z[1]), ylab = expression(z[2]), zlab = expression(hat(G)(z[1],z[2])), lwd = 1.5, col = "cadetblue2", pch = 1)
+points3d(x = grid_df$Kim[index], y = grid_df$Bloem[index], 0.95, pch = 19, col = "dodgerblue2")
+```
+
+## Estimated quantile curves: functions
+```{r}
+# estimated quantile curves function - parametric estimation
+qc_par_max_func <- function(p = 0.95, dat = max_dat, model.type = c("log", "bilog")){
+  w_vec = ExtremalDep :: simplex(d = 2, n = 300)
+  mod <- fbvevd(x = dat, model = model.type)
+  fitted_model <- fitted(mod)
+  if(model.type == "log"){
+    A.w_hat <- abvevd(x = w_vec[,1], dep = fitted_model["dep"], model = "log")
+  } else {
+    A.w_hat <- abvevd(w_vec[,1], alpha = fitted_model["alpha"], 
+                      beta = fitted_model["beta"], model = "bilog")
+  }
+  prob1 <- p^(w_vec[,2]/A.w_hat)
+  mu_hat <- fitted_model["loc1"]
+  sigma_hat <- fitted_model["scale1"]
+  gamma_hat <- fitted_model["shape1"]
+  G1_inv <- qgev(p = prob1, location = mu_hat, scale = sigma_hat, 
+                 shape = gamma_hat, lower.tail = T)
+  upper_bound <- mu_hat - sigma_hat/gamma_hat
+  G1_inv[G1_inv == Inf] = upper_bound
+  
+  prob2 <- p^(w_vec[,1]/A.w_hat)
+  mu_hat <- fitted_model["loc2"]
+  sigma_hat <- fitted_model["scale2"]
+  gamma_hat <- fitted_model["shape2"]
+  G2_inv <- qgev(p = prob2, location = mu_hat, scale = sigma_hat, 
+                 shape = gamma_hat, lower.tail = T)
+  upper_bound <- mu_hat - sigma_hat/gamma_hat
+  G2_inv[G2_inv == Inf] = upper_bound
+  quantiles_hat <- cbind(G1_inv, G2_inv)
+  return(quantiles_hat)
+}
+
+# estimated quantile curves function - non-parametric estimation
+qc_nonpar_max_func <- function(p = 0.95, dat = max_dat, est.method = "ht"){
+  w_vec = ExtremalDep :: simplex(d = 2, n = 300)
+  A.w_hat <- beed.mod(dat, w_vec, d = 2, est = est.method, margin = "est", k = 21)$A
+  prob1 <- p^(w_vec[,2]/A.w_hat)
+  mod1 <- fevd(dat[,1], type = "GEV", method = "MLE")
+  mu_hat <- mod1$results$par["location"]
+  sigma_hat <- mod1$results$par["scale"]
+  gamma_hat <- mod1$results$par["shape"]
+  G1_inv <- qgev(p = prob1, location = mu_hat, scale = sigma_hat, 
+                 shape = gamma_hat, lower.tail = T)
+  upper_bound <- mu_hat - sigma_hat/gamma_hat
+  G1_inv[G1_inv == Inf] = upper_bound
+  
+  prob2 <- p^(w_vec[,1]/A.w_hat)
+  mod2 <- fevd(dat[,2], type = "GEV", method = "MLE")
+  mu_hat <- mod2$results$par["location"]
+  sigma_hat <- mod2$results$par["scale"]
+  gamma_hat <- mod2$results$par["shape"]
+  G2_inv <- qgev(p = prob2, location = mu_hat, scale = sigma_hat, 
+                 shape = gamma_hat, lower.tail = T)
+  upper_bound <- mu_hat - sigma_hat/gamma_hat
+  G2_inv[G2_inv == Inf] = upper_bound
+  quantiles_hat <- cbind(G1_inv, G2_inv)
+  return(quantiles_hat)
+}
+```
+
+## Estimated quantile curves for BEV distribution: plots
+```{r}
+par(mar = c(4.2, 4.2, 1, 1))
+
+# p-value = 0.95
+pval = 0.95
+plot(obs.max, col = transp_col("mediumpurple3", perc = 30, name = "light.purple3"), pch = 19, xlim = c(34, 39.6), ylim = c(32, 38.5), xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"))
+points(obs.max, col = "mediumpurple4", pch = 1)
+points(notobs.max, col = transp_col("lightgreen", perc = 30, name = "light.green"), pch = 19)
+points(notobs.max, col = "chartreuse4", pch = 1)
+lines(qc_par_max_func(p = pval, dat = max_dat, model.type = "log"), col = col.a, lty = 1, lwd = 1.5)
+lines(qc_par_max_func(p = pval, dat = max_dat, model.type = "bilog"), col = col.d, lty = 2, lwd = 1.5)
+lines(qc_nonpar_max_func(p = pval, dat = max_dat, est.method = "ht"), col = col2, lty = 3, lwd = 1.5)
+legend("bottomright", legend = c("Logistic", "Bilogistic", "HT-estimator"), lty = c(1,2,3), lwd = rep(1.5,4), col = c(col.a, col.d, col2))
+
+# p-value = 0.99
+pval <- 0.99
+plot(obs.max, col = transp_col("mediumpurple3", perc = 30, name = "light.purple3"), pch = 19, xlim = c(34, 39.7), ylim = c(32, 38.5), xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"))
+points(obs.max, col = "mediumpurple4", pch = 1)
+points(notobs.max, col = transp_col("lightgreen", perc = 30, name = "light.green"), pch = 19)
+points(notobs.max, col = "chartreuse4", pch = 1)
+par(mar = c(4.2, 4.2, 1, 1))
+lines(qc_par_max_func(p = pval, dat = max_dat, model.type = "log"), col = col.a, lty = 1, lwd = 1.5)
+lines(qc_par_max_func(p = pval, dat = max_dat, model.type = "bilog"), col = col.d, lty = 2, lwd = 1.5)
+lines(qc_nonpar_max_func(p = pval, dat = max_dat, est.method = "ht"), col = col2, lty = 3, lwd = 1.5)
+legend("bottomright", legend = c("Logistic", "Bilogistic", "HT-estimator"), lty = c(1,2,3), lwd = rep(1.5,4), col = c(col.a, col.d, col2))
+```
+
+## Estimated quantile curves for original distribution: plots
+```{r}
+pvals <- c(0.95, 0.975, 0.99)
+
+# zoomed-out plot
+mycol <- transp_col("brown2", perc = 50, name = "lt.brown2")
+par(mar = c(4.2, 4.2, 1, 1))
+plot(kb_dat, col = mycol, xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"), xlim = c(20.79, 39.1), ylim = c(19.5, 38.0))
+points(obs.max, col = transp_col("mediumpurple3", perc = 50, name = "light.purple3"), pch = 19)
+points(obs.max, col = "mediumpurple4", pch = 1)
+points(notobs.max, col = transp_col("lightgreen", perc = 50, name = "light.purple3"), pch = 19)
+points(notobs.max, col = "chartreuse4", pch = 1)
+dat <- max_dat
+for(i in 1:length(pvals)){
+lines(qc_par_max_func(p = pvals[i]^block_size, dat = max_dat, model.type = "log"), col = col.a, lty = 1, lwd = 1.5)
+lines(qc_par_max_func(p = pvals[i]^block_size, dat = max_dat, model.type = "bilog"), col = col.d, lty = 2, lwd = 1.5)
+lines(qc_nonpar_max_func(p = pvals[i]^block_size, dat = max_dat, est.method = "ht"), col = col2, lty = 3, lwd = 1.5)
+}
+legend("bottomright", legend = c("Logistic", "Bilogistic", "HT-estimator"), lty = 1:3, lwd = rep(1.5,4), col = c(col.a, col.d, col2))
+
+# Zoomed-in plot
+mycol <- transp_col("brown2", perc = 60, name = "lt.brown2")
+par(mar = c(4.2, 4.2, 1, 1))
+plot(kb_dat, col = mycol, xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"), 
+     xlim = c(34,39.7), ylim = c(32, 38.4))
+     # xlim = c(34,39.9), ylim = c(32, 38.7))
+points(obs.max, col = transp_col("mediumpurple3", perc = 50, name = "light.purple3"), pch = 19)
+points(obs.max, col = "mediumpurple4", pch = 1)
+points(notobs.max, col = transp_col("lightgreen", perc = 50, name = "light.purple3"), pch = 19)
+points(notobs.max, col = "chartreuse4", pch = 1)
+dat <- max_dat
+for(i in 1:length(pvals)){
+lines(qc_par_max_func(p = pvals[i]^block_size, dat = max_dat, model.type = "log"), col = col.a, lty = 1, lwd = 1.5)
+lines(qc_par_max_func(p = pvals[i]^block_size, dat = max_dat, model.type = "bilog"), col = col.d, lty = 2, lwd = 1.5)
+lines(qc_nonpar_max_func(p = pvals[i]^block_size, dat = max_dat, est.method = "ht"), col = col2, lty = 3, lwd = 1.5)
+}
+legend("bottomright", legend = c("Logistic", "Bilogistic", "HT-estimator"), lty = 1:3, lwd = rep(1.5,4), col = c(col.a, col.d, col2))
+```
+
+# Approach 2: threshold exceedances
+
+## Calculation of the thresholds
+```{r}
+dat <- kb_dat
+
+# H[0,1] tilde plot vs k
+par(mar = c(4.7, 4.5, 1.8, 1.8))
+bvtcplot.info <- bvtcplot.mod(dat, col = "lightsteelblue4", 
+                              pch = 20, 
+                              ylab = expression(tilde(H)(1)), 
+                              xlab = bquote(k))
+
+abline(v = 160, lty = 2)
+abline(h = 0.975, lty = 2)
+k0 = 160
+
+# threshold selection
+n <- nrow(dat)
+k1 <- k0/2
+t1 <- sort(dat[,1])[n-k1]
+t2 <- sort(dat[,2])[n-k1]
+t1; t2
+
+# visualisation of exceedances
+col.pch_func <- function(dat, t1, t2){
+  n <- nrow(dat)
+  mycols <- c()
+  pch <- c()
+  for(i in 1:nrow(dat)){
+    # R11
+     if(dat[i,1] > t1 & dat[i,2] > t2){
+       mycol[i] <- transp_col("mediumpurple2", perc = 50, name = "lt.brown2")
+       pch[i] <- 19
+       
+       # R10
+     } else if(dat[i,1] > t1 & dat[i,2] <= t2){
+        mycol[i] <- transp_col("dodgerblue", perc = 50, name = "lt.brown2")
+        pch[i] <- 19
+        
+        # R01
+     } else if(dat[i,1] <= t1 & dat[i,2] > t2){
+        mycol[i] <- transp_col("mediumseagreen", perc = 50, name = "lt.brown2")
+        pch[i] <- 19
+        
+        # R10
+     } else {
+       mycol[i] <- transp_col("brown2", perc = 50, name = "lt.brown2")
+       pch[i] = 1
+     }
+  }
+  return(list("col" = mycol, "pch" = pch))
+}
+par(mar = c(4.2, 4.2, 1, 1))
+my_cols <- col.pch_func(dat = kb_dat, t1 = t1, t2 = t2)$col
+my_pchs <- col.pch_func(dat = kb_dat, t1 = t1, t2 = t2)$pch
+plot(kb_dat, col = my_cols, pch = my_pchs, xlab = expression("Kimberley (" * degree * "C)"),ylab = expression("Bloemfontein (" * degree * "C)"))
+abline(v = t1, lty = 2) 
+abline(h = t2, lty = 2)
+text(x = 23.9, y = 22.4, labels = bquote(R[0*0]))
+text(x = 23.9, y = 34.4, labels = bquote(R[0*1]))
+text(x = 38.75, y = 22.4, labels = bquote(R[1*0]))
+text(x = 38.75, y = 34.4, labels = bquote(R[1*1]))
+
+# Test for independence
+## marginal exceedances
+exceed_kim <- dat$Kim[dat$Kim > t1]
+acf(exceed_kim)
+Box.test(exceed_kim, type = "Ljung-Box")
+exceed_bloem <- dat$Bloem[dat$Bloem > t2]
+acf(exceed_bloem)
+Box.test(exceed_bloem, type = "Ljung-Box")
+### the marginal exceedances are independent :)
+
+## joint exceedances
+joint_exceed <- dat[dat$Kim > t1 & dat$Bloem > t2,]
+acf(joint_exceed$Kim)
+Box.test(joint_exceed$Kim, type = "Ljung-Box")
+acf(joint_exceed$Bloem)
+Box.test(joint_exceed$Bloem, lag = 4, type = "Ljung-Box")
+### the joint exceedances are independent :)
+
+# checking the interpretation of k
+sum(dat$Kim > t1 & dat$Bloem > t2) + sum(dat$Kim > t1 & dat$Bloem <= t2) + sum(dat$Kim <= t1 & dat$Bloem > t2)
+k0
+sum(dat$Kim > t1) + sum(dat$Bloem > t2)
+
+# R00
+sum(dat$Kim <= t1 & dat$Bloem <= t2)    
+# R10                                  
+sum(dat$Kim > t1 & dat$Bloem <= t2)      
+# R01
+sum(dat$Kim <= t1 & dat$Bloem > t2)     
+# R11
+sum(dat$Kim > t1 & dat$Bloem > t2)       
+# R10+R01+R00                           
+n - sum(dat$Kim <= t1 & dat$Bloem <= t2) 
+```
+
+## Marginal distribution: GP valid approximation?
+```{r}
+dat <- kb_dat
+
+# Kimberley
+# ML method (POT)
+gpd_mle <- fevd(dat[,1], threshold = t1, type = "GP", method = "MLE")
+sigma1 <- gpd_mle$results$par[1]
+gamma1 <- gpd_mle$results$par[2]
+
+# Diagnostic plot
+par(mar = c(4.2, 4.2, 1, 1))
+plot(gpd_mle, type = c("qq"), main ="", col = "salmon1", pch = 19)
+
+########################################################################
+
+# Bloemfontein
+# ML method (POT)
+gpd_mle <- fevd(dat[,2], threshold = t2, type = "GP", method = "MLE")
+sigma2 <- gpd_mle$results$par[1]
+gamma2 <- gpd_mle$results$par[2]
+
+# Diagnostic plot
+par(mar = c(4.2, 4.2, 1, 1))
+plot(gpd_mle, type = c("qq"), main ="", col = "orchid2", pch = 19)
+```
+
+## Parametric estimation of A(t)
+```{r}
+dat <- kb_dat
+
+# fitting a few parametric models
+exceed_log <- evd :: fbvpot(dat, threshold = c(t1, t2), model = "log")
+round(rbind(fitted(exceed_log), std.errors(exceed_log)), 3)
+
+exceed_hr <- evd :: fbvpot(dat, threshold = c(t1, t2), model = "hr")
+round(rbind(fitted(exceed_hr), std.errors(exceed_hr)), 3)
+
+exceed_alog <- evd :: fbvpot(dat, threshold = c(t1,t2), model = "alog", std.err = T)
+round(rbind(fitted(exceed_alog), std.errors(exceed_alog)), 3)
+
+exceed_bilog <- evd :: fbvpot(dat, threshold = c(t1, t2), model = "bilog")
+round(rbind(fitted(exceed_bilog), std.errors(exceed_bilog)), 3)
+fitted(exceed_bilog)["alpha"] - fitted(exceed_bilog)["beta"]
+```
+
+## Plots of A(t) - parametric and non-parametric
+```{r}
+dat <- kb_dat
+par(mar = c(4.2, 4.5, 1, 1))
+set.lwd = 1.5
+
+# Parametric est.
+abvevd(dep = fitted(exceed_log)["dep"], model = "log", plot = T, lty = 1, col = "red2", lwd = set.lwd, ylab = expression(hat(A)(t)))
+abvevd(dep = fitted(exceed_alog)["dep"], asy = c(fitted(exceed_alog)["asy1"], fitted(exceed_alog)["asy2"]), model = "alog", add = T, lty = 2, col = "dodgerblue2", lwd = set.lwd)
+abvevd(alpha = fitted(exceed_bilog)["alpha"], beta = fitted(exceed_bilog)["alpha"], model = "bilog", add = T, lty = 3, col = "mediumpurple", lwd = set.lwd)
+abvevd(dep = fitted(exceed_hr)["dep"], model = "hr", add = T, lty = 4, col = "yellow3", lwd = set.lwd)
+
+# Non-parametric est.
+x <- ExtremalDep :: simplex(d = 2, n = 100)
+Apot <- abvnonpar.mod(x = x, data = dat, method = "pot", k = k0, epmar = F,
+add = T, lty = 5, col = "seagreen4", lwd = set.lwd, ylab = expression(hat(A)(t))) 
+
+legend("bottomleft", legend = c("Logistic", "Asy. logistic", "Bilogistic", "Husler-Reiss", "CF-estimator"), lty = 1:5, lwd = rep(set.lwd, 5), col = c("red2", "dodgerblue2", "mediumpurple", "yellow3", "seagreen4"))
+
+# The given plot: two parametric models and one non-parametric estimator
+abvevd(dep = fitted(exceed_log)["dep"], model = "log", plot = T, lty = 1, col = "red2", lwd = set.lwd, ylab = expression(hat(A)(t)))
+abvevd(dep = fitted(exceed_alog)["dep"], asy = c(fitted(exceed_alog)["asy1"], fitted(exceed_alog)["asy2"]), model = "alog", add = T, lty = 2, col = "dodgerblue2", lwd = set.lwd)
+x <- ExtremalDep :: simplex(d = 2, n = 100)
+Apot <- abvnonpar.mod(x = x, data = dat, method = "pot", k = k0, epmar = F,
+add = T, lty = 3, col = "seagreen4", lwd = set.lwd) 
+
+legend("bottomleft", legend = c("Logistic", "Asy. logistic", "CF-estimator"), lty = 1:3, lwd = rep(set.lwd, 3), col = c("red2", "dodgerblue2", "seagreen4"))
+```
+
+## Plot of est. F(x,y) (using logistic model)
+```{r}
+dat <- kb_dat
+Fhat.par <- function(x, par.est, t, lambda){
+  sigma <- par.est[1]
+  gamma <- par.est[2]
+  aa <- 1 - lambda * (1 + gamma * (x - t)/sigma) ^ (-1/gamma)
+  return(aa)
+}
+
+Fhat <- function(dat, x0, y0, t1, t2){
+  n <- nrow(dat)
+  lambda1 <- sum(dat[,1] > t1)/n
+  lambda2 <- sum(dat[,2] > t2)/n
+  
+  model.est <- evd :: fbvpot(dat, threshold = c(t1, t2), 
+                             model = "log")$estimate
+  
+  Fhatx <- Fhat.par(x = x0, par.est = model.est[1:2], t = t1, 
+                    lambda = lambda1)
+
+  Fhaty <- Fhat.par(x = y0, par.est = model.est[3:4], t = t2, 
+                    lambda = lambda2)
+  
+  w <- log(Fhaty) / log(Fhatx * Fhaty)
+  Ahatw <- abvevd(w, dep = model.est["dep"], model = "log") 
+   
+  Fxy <- exp(log(Fhatx * Fhaty) * Ahatw)
+  
+  return(Fxy)
+}
+model.est <- evd :: fbvpot(dat, threshold = c(t1, t2), 
+                             model = "log")$estimate
+ub1 <- t1 - model.est["scale1"]/model.est["shape1"]
+ub2 <- t2 - model.est["scale2"]/model.est["shape2"]
+
+xseq <- seq(t1, ub1, length = 1000)
+yseq <- seq(t2, ub2, length = 1000)
+grid_vals <- expand.grid(xseq, yseq)
+grid_df <- as.data.frame(grid_vals)
+colnames(grid_df) = c('Kim', 'Bloem')
+zvals <- Fhat(dat = kb_dat, x0 = grid_df$Kim, y0 = grid_df$Bloem, t1, t2)
+
+p <- 0.975
+index <- which(zvals > p - 0.0007 & zvals < p + 0.0007)
+
+# 3D-plot
+plot3d(grid_df$Kim, grid_df$Bloem, zvals, xlab = "x", ylab = "y", zlab = "", pch = 19, lwd = 1.5, col = "tan1")
+mtext3d(text = expression(hat(F)(x,y)), edge = "z-+", line = 6)
+points3d(x = grid_df$Kim[index], y = grid_df$Bloem[index], z = p, pch = 20, col = "red2")
+```
+
+## Estimated quantile curves of F: functions
+```{r}
+# inverse of F: function
+F.inv_func <- function(dat_vec, sigma_pot_mle, gamma_pot_mle, t, p){
+  X <- sort(dat_vec)
+  n <- length(dat_vec)
+  k <- sum(X > t)
+
+  # MLE
+  U_mle <- t + (sigma_pot_mle/gamma_pot_mle) * (((n*p)/k)^(-gamma_pot_mle) - 1)
+
+  return(U_mle)
+}
+
+# non-parametric estimation
+qc_nonpar_func <- function(p, dat, t1, t2){
+
+  w_vec = ExtremalDep :: simplex(d = 2, n = 300)
+  A.w_hat <- abvnonpar.mod(x = w_vec[,1], data = dat, method = "pot", 
+                       k = k0, epmar = F)
+  prob1 <- p^(w_vec[,2]/A.w_hat)
+  mod1 <- fevd(dat$Kim, threshold = t1, type = "GP", method = "MLE")
+  sigma_hat <- mod1$results$par["scale"]
+  gamma_hat <- mod1$results$par["shape"]
+  F1_inv <- F.inv_func(dat$Kim, sigma_hat, gamma_hat, t = t1, p = 1 - prob1)
+  
+  prob2 <- p^(w_vec[,1]/A.w_hat)
+  mod2 <- fevd(dat$Bloem, threshold = t2, type = "GP", method = "MLE")
+  sigma_hat <- mod2$results$par["scale"]
+  gamma_hat <- mod2$results$par["shape"]
+  F2_inv <- F.inv_func(dat$Bloem, sigma_hat, gamma_hat, t = t2, p = 1 - prob2)
+  
+  Q_Fhat.p <- cbind(F1_inv, F2_inv)
+  return(Q_Fhat.p)
+}
+
+# parametric estimation
+quantile_curves_par_exceed <- function(p, dat, t1 = t1, t2 = t2, model.type){
+  w_vec <- ExtremalDep :: simplex(d = 2, n = 300)
+  mod <- evd :: fbvpot(dat, threshold = c(t1, t2), model = model.type)
+  fitted_model <- fitted(mod)
+
+  if(model.type == "log"){
+    A.w_hat <- abvevd(x = w_vec[,1], dep = fitted_model["dep"], model = "log")
+  } else {
+    A.w_hat <- abvevd(w_vec[,1], dep = fitted_model["dep"], 
+                      asy = fitted_model[c("asy1", "asy2")], model = "alog")
+  }
+  
+  prob1 <- p^(w_vec[,2]/A.w_hat)
+  sigma_hat <- fitted_model["scale1"]
+  gamma_hat <- fitted_model["shape1"]
+  F1_inv <- F.inv_func(dat[,1], sigma_hat, gamma_hat, t = t1, p = 1 - prob1)
+  
+  prob2 <- p^(w_vec[,1]/A.w_hat)
+  sigma_hat <- fitted_model["scale2"]
+  gamma_hat <- fitted_model["shape2"]
+  F2_inv <- F.inv_func(dat[,2], sigma_hat, gamma_hat, t = t2, p = 1 - prob2)
+  
+  Q_Fhat.p <- cbind(F1_inv, F2_inv)
+  return(Q_Fhat.p)
+}
+
+# transparent colours and choices for pch
+transp.col.pch_func <- function(dat, t1, t2){
+  n <- nrow(dat)
+  mycols <- c()
+  pch <- c()
+  for(i in 1:nrow(dat)){
+    # R11
+     if(dat[i,1] > t1 & dat[i,2] > t2){
+       mycol[i] <- transp_col("mediumpurple2", perc = 70, name = "lt.brown2")
+       pch[i] <- 19
+       
+       # R10
+     } else if(dat[i,1] > t1 & dat[i,2] <= t2){
+        mycol[i] <- transp_col("dodgerblue", perc = 70, name = "lt.brown2")
+        pch[i] <- 19
+        
+        # R01
+     } else if(dat[i,1] <= t1 & dat[i,2] > t2){
+        mycol[i] <- transp_col("mediumseagreen", perc = 70, name = "lt.brown2")
+        pch[i] <- 19
+        
+        # R10
+     } else {
+       mycol[i] <- transp_col("brown2", perc = 50, name = "lt.brown2")
+       pch[i] = 1
+     }
+  }
+  return(list("col" = mycol, "pch" = pch))
+}
+```
+
+## Estimated quantile curves of F: plots
+```{r}
+# zoomed-out plot
+par(mar = c(4.2, 4.2, 1, 1))
+my_cols <- transp.col.pch_func(dat = kb_dat, t1 = t1, t2 = t2)$col
+my_pchs <- transp.col.pch_func(dat = kb_dat, t1 = t1, t2 = t2)$pch
+plot(kb_dat, col = my_cols, pch = my_pchs, xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"), xlim = c(20,39.6), ylim = c(18,39.8))
+abline(v = t1, lty = 2) 
+abline(h = t2, lty = 2)
+dat <- kb_dat
+set.lwd <- 1.5
+
+pvals <- c(0.95, 0.975, 0.99)
+abline(v = t1, h = t2, lwd = 1, lty = 2)
+for(i in 1:length(pvals)){
+  lines(quantile_curves_par_exceed(p = pvals[i], dat = kb_dat, t1 = t1, t2 = t2, model.type = "log"), col = "red2", lwd = 1.5, lty = 1)
+lines(quantile_curves_par_exceed(p = pvals[i], dat = kb_dat, t1 = t1, t2 = t2, model.type = "alog"), col = "dodgerblue2", lwd = 1.5, lty = 2)
+  qc_nonpar <- qc_nonpar_func(p = pvals[i], dat = kb_dat, t1 = t1, t2 = t2) 
+  lines(qc_nonpar[,1], qc_nonpar[,2], col = "seagreen4", lty = 3, lwd = 1.5)
+}
+legend("bottomright", legend = c("Logistic", "Asy. logistic", "CF-estimator"), lty = 1:3, lwd = rep(set.lwd, 3), col = c("red2", "dodgerblue2","seagreen4"))
+
+#################################################################
+
+# zoomed-in plot
+par(mar = c(4.2, 4.2, 1, 1))
+my_cols <- transp.col.pch_func(dat = kb_dat, t1 = t1, t2 = t2)$col
+my_pchs <- transp.col.pch_func(dat = kb_dat, t1 = t1, t2 = t2)$pch
+plot(kb_dat, col = my_cols, pch = my_pchs, xlab = expression("Kimberley (" * degree * "C)"), ylab = expression("Bloemfontein (" * degree * "C)"),
+     xlim = c(34, 39.6), ylim = c(32, 39.8))
+abline(v = t1, lty = 2) 
+abline(h = t2, lty = 2)
+dat <- kb_dat
+set.lwd <- 1.5
+
+pvals <- c(0.95, 0.975, 0.99)
+abline(v = t1, h = t2, lwd = 1, lty = 2)
+for(i in 1:length(pvals)){
+  lines(quantile_curves_par_exceed(p = pvals[i], dat = kb_dat, t1 = t1, t2 = t2, model.type = "log"), col = "red2", lwd = 1.5, lty = 1)
+lines(quantile_curves_par_exceed(p = pvals[i], dat = kb_dat, t1 = t1, t2 = t2, model.type = "alog"), col = "dodgerblue2", lwd = 1.5, lty = 2)
+  qc_nonpar <- qc_nonpar_func(p = pvals[i], dat = kb_dat, t1 = t1, t2 = t2) 
+  lines(qc_nonpar[,1], qc_nonpar[,2], col = "seagreen4", lty = 3, lwd = 1.5)
+}
+legend("bottomright", legend = c("Logistic", "Asy. logistic", "CF-estimator"), lty = 1:3, lwd = rep(set.lwd, 3), col = c("red2", "dodgerblue2","seagreen4"))
+```
